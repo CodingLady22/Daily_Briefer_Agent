@@ -60,16 +60,22 @@ export type LlmTier = "cheap" | "premium";
 
 // Picks the configured provider and the model for the requested cost tier.
 // WebSearch/Benchmark/Pricing use "cheap"; Synthesis/Personalization use "premium".
-export function getLLM(tier: LlmTier): BaseChatModel {
+// `maxTokens` is required so every call bounds its output (see code-standards.md) —
+// each provider names the field differently, so it's mapped per-provider here.
+export function getLLM(tier: LlmTier, maxTokens: number): BaseChatModel {
   const model = tier === "cheap" ? config.llmModelCheap : config.llmModelPremium;
 
   switch (config.llmProvider) {
     case "gemini":
-      return new ChatGoogleGenerativeAI({ model, apiKey: config.geminiApiKey });
+      return new ChatGoogleGenerativeAI({
+        model,
+        apiKey: config.geminiApiKey,
+        maxOutputTokens: maxTokens,
+      });
     case "openai":
-      return new ChatOpenAI({ model, apiKey: config.openaiApiKey });
+      return new ChatOpenAI({ model, apiKey: config.openaiApiKey, maxTokens });
     case "anthropic":
-      return new ChatAnthropic({ model, apiKey: config.anthropicApiKey });
+      return new ChatAnthropic({ model, apiKey: config.anthropicApiKey, maxTokens });
     default:
       throw new Error(`Unknown LLM provider: ${config.llmProvider as string}`);
   }

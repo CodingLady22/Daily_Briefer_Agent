@@ -8,8 +8,16 @@ const tavily = new TavilySearch({
   maxResults: 5,
 });
 
-export async function search(query: string): Promise<RawItem[]> {
-  const response = await tavily.invoke({ query });
+export type SearchOptions = {
+  timeRange?: "day" | "week" | "month" | "year";
+  includeDomains?: string[];
+};
+
+export async function search(
+  query: string,
+  options: SearchOptions = {},
+): Promise<RawItem[]> {
+  const response = await tavily.invoke({ query, ...options });
   if ("error" in response) {
     return []; // Tavily returned an error payload instead of results
   }
