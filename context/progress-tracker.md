@@ -6,9 +6,9 @@ Update this file after every completed feature. Any AI agent reading this should
 
 ## Current Status
 
-**Phase:** 1, 2, 3 complete; Phase 4 in progress (4.1 done)
-**Last completed:** 4.1 WebSearch agent (live-verified)
-**Next:** 4.2 Benchmark agent
+**Phase:** 1, 2, 3 complete; Phase 4 in progress (4.1, 4.2 done)
+**Last completed:** 4.2 Benchmark agent (live-verified)
+**Next:** 4.3 Pricing agent
 
 > All required `.env` values are now in place (Gemini as `LLM_PROVIDER`; `ANTHROPIC_API_KEY` intentionally left blank — see below). `npx tsx src/index.ts` was run live and printed `MongoDB connected` / `AI Digest started` — Phase 1 exit check passed for real. `search.tool.ts`, `benchmarkScraper.tool.ts`, and `pricingScraper.tool.ts` were all live-tested with the real `TAVILY_API_KEY` and returned correctly typed `RawItem[]` data — Phase 3 exit check passed for real.
 > `ANTHROPIC_API_KEY` is blank because of an account issue on the user's side — this is fine as-is. `src/config/index.ts` fully supports all three providers (gemini/openai/anthropic); the schema, refine check, and `getLLM()` switch only require whichever provider's key matches `LLM_PROVIDER`. Do not special-case or comment out Anthropic support again — nothing needs to change here once the account issue clears, just set `LLM_PROVIDER=anthropic` and fill in the key.
@@ -23,6 +23,10 @@ Update this file after every completed feature. Any AI agent reading this should
 > `getLLM(tier)` signature changed to `getLLM(tier, maxTokens)` — now required on every call, mapped per-provider (`maxOutputTokens` for Gemini, `maxTokens` for OpenAI/Anthropic) to satisfy code-standards.md's "always set maxTokens" rule. Update call sites in 4.2 onward accordingly.
 > `search()` in `search.tool.ts` gained an optional second `options` param (`{ timeRange?, includeDomains? }`), passed through to Tavily's `.invoke()`. Backward compatible — existing `benchmarkScraperTool`/`pricingScraperTool` calls (`search(query)` with no options) are unaffected.
 > Live-verified end to end with real MongoDB (after the user added their current IP to the Atlas Network Access list — a one-time dev-environment fix, not a code issue) + real Tavily + real Gemini: 71 raw hits across 17 source queries → 30 cleaned `RawItem[]`, 0 errors, ~22s run time.
+> Live-testing observation for Phase 4.2: `LLM_MODEL_CHEAP=gemini-2.5-flash-lite` (the value that had been in `.env` since Phase 1) started returning a live 404 — "model ... is no longer available to new users." This is a Google-side deprecation, not a code bug. Per user decision, `.env` was updated to `gemini-3.5-flash-lite`, which matches what an earlier session had already confirmed as the correct current cheap-tier model ID (see `memory.md`) but which `.env` had never been updated to reflect. `.env.example`'s comment example (`gemini-1.5-flash`) is illustrative only and was left as-is.
+> Resolved (Phase 4.2): `benchmark.agent.ts` built. Calls `benchmarkScraperTool()` (raw `RawItem[]` from the three leaderboard search queries), runs one batched `getLLM("cheap", 4096).withStructuredOutput(...)` call to extract `{modelName, benchmark, score, source}` triples per `benchmark.prompt.ts`'s instructions (only when a specific model + benchmark name + number all co-occur in the text), reads the most recent `BenchmarkSnapshot` via `.sort({date:-1}).findOne().lean()`, diffs each current score against a previous score matched by `modelName::benchmark` key (`previousScore: null` when no match), flags `Math.abs(delta) > 2` as significant, saves the new snapshot, returns `BenchmarkDelta[]`. Whole body wrapped in one try/catch per code-standards.md — any failure (tool, LLM, or DB) pushes to `state.errors` and returns no `benchmarkDeltas` key, leaving the state's default `[]`.
+> Live-verified twice in a row (~21s apart): first run → 42 scores extracted, 0 prior snapshot, all deltas `null` (expected, nothing to diff against yet), snapshot saved. Second run → 51 scores extracted, correctly read the first run's just-saved snapshot, computed real deltas for matching model+benchmark pairs (mostly `delta: 0` since real leaderboards don't change in 21 seconds — confirms the diff logic works, not that it's broken), saved its own new snapshot. Confirms extraction, snapshot read, delta calc, and snapshot save all work end-to-end against real Gemini + MongoDB.
+> Real bug found and fixed (post-4.2, surfaced when the user manually re-ran `_test-benchmark.ts`): `search.tool.ts`'s `new URL(r.url).hostname` threw `TypeError: Invalid URL` whenever Tavily returned a relative redirect URL (e.g. `/goto?url=CAESaAH...`) instead of an absolute one — seen consistently on the LiveBench query. This crashed the whole `search()` call (and anything awaiting it), surfacing as `"Benchmark: Invalid URL"` in `benchmark.agent.ts`'s caught errors. Fixed in `search.tool.ts` by wrapping the per-result `new URL()` call in try/catch and skipping (not including) any result whose URL doesn't parse — it can't be cited as a source anyway. This is a shared tool used by WebSearch, Benchmark, and (soon) Pricing agents, so the fix benefits all three. Re-verified live: Benchmark agent now runs clean (24 deltas, 0 errors) and WebSearch agent re-tested with no regression (10 items, 0 errors).
 
 ---
 
@@ -67,7 +71,7 @@ Do not start a new phase until every item in the current phase is checked.
 ## Phase 4 — Agents
 
 - [x] 4.1 WebSearch agent — fetches, filters last 24h, dedupes vs last 7 days (live-verified: 71→30 items, 0 errors)
-- [ ] 4.2 Benchmark agent — scrapes, diffs against last snapshot, saves new snapshot
+- [x] 4.2 Benchmark agent — scrapes, diffs against last snapshot, saves new snapshot (live-verified twice in a row: 42 scores/all-null deltas → 51 scores/real deltas vs the first run's snapshot)
 - [ ] 4.3 Pricing agent — scrapes prices, diffs against last snapshot, saves new snapshot
 - [ ] 4.4 Synthesis agent — groups items, writes narrative, attaches source URLs
 - [ ] 4.5 Personalization agent — reorders, adds "Why this matters", flags priority
