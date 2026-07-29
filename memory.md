@@ -1,6 +1,6 @@
-# Memory — AI Digest Build (Phases 1-3 + Phase 4.1)
+# Memory — AI Digest Build (Phases 1-3 + Phase 4.1-4.2)
 
-Last updated: 2026-07-28
+Last updated: 2026-07-29
 
 ## What was built
 
@@ -8,8 +8,10 @@ Last updated: 2026-07-28
 - **Phase 2:** `src/graph/state.ts` (`DigestState` annotation), `src/graph/supervisor.ts`, `src/graph/graph.ts` (supervisor → webSearch/benchmark/pricing parallel → synthesis → personalization → emailFormatter → END), six stub agent files in `src/agents/`.
 - **Phase 3 tools:** `src/tools/webFetch.tool.ts`, `search.tool.ts` (Tavily), `benchmarkScraper.tool.ts`, `pricingScraper.tool.ts`.
 - **Phase 4.1 — WebSearch agent:** `src/agents/webSearch.agent.ts` + `src/agents/webSearch.prompt.ts`. Runs one Tavily query per source from `architecture.md` (excluding Benchmarks/Pricing groups), scoped to the last 24h via `timeRange: "day"` + `includeDomains`, dedupes by URL, filters out anything already covered in the last 7 days of `DigestRecord.sourceUrls`, then runs a single batched cheap-tier LLM cleanup pass (drops non-news hits, writes clean titles/summaries/source names).
-- All of Phases 1–3 plus 4.1 are **live-verified with real credentials**, not just typechecked.
-- Left a reusable, gitignored dev script at `src/_test-websearch.ts` (pattern: `src/_test-*.ts`, added to `.gitignore`) so the user can re-run `npx tsx src/_test-websearch.ts` themselves anytime without asking — more `_test-<agent>.ts` scripts will be added per agent as Phase 4 continues.
+- **Phase 4.2 — Benchmark agent:** `src/agents/benchmark.agent.ts` + `src/agents/benchmark.prompt.ts`. Calls `benchmarkScraperTool()`, runs one batched cheap-tier LLM extraction pass to pull `{modelName, benchmark, score, source}` triples out of noisy leaderboard search text, dedupes by `modelName::benchmark` (sorted by source first, deterministic last-write-wins), reads the most recent `BenchmarkSnapshot` from MongoDB, diffs current vs previous scores (`previousScore: null` when no prior match), flags `Math.abs(delta) > 2` as significant, skips the snapshot save (keeping the old baseline) if fewer than 5 scores were extracted, otherwise saves the new snapshot, returns `BenchmarkDelta[]`. Whole body is one try/catch — any failure returns only the new error, never the accumulated list.
+- **Post-4.2 code review — 6 issues fixed, all live-reverified:** (1) error double-counting in both `benchmark.agent.ts` and `webSearch.agent.ts` — catch blocks were spreading `state.errors` back in even though the `errors` reducer already appends, duplicating every prior error on each new failure; (2) snapshot guard added (`MIN_SNAPSHOT_ITEMS = 5`); (3) `dedupeScores()` added before diffing/saving; (4) `benchmarkScraper.tool.ts` switched `Promise.all` → `Promise.allSettled` so one failing leaderboard query no longer discards the other two; (5) `search.tool.ts`'s return type changed to `{ items, droppedCount }` so unparseable-URL drops are surfaced to callers instead of silently discarded; (6) `benchmark.agent.ts`'s `MAX_TOKENS` raised 4096 → 8192. These are now permanent rules — architecture.md rules 13–16 and code-standards.md's error-handling section.
+- All of Phases 1–3 plus 4.1–4.2 are **live-verified with real credentials**, not just typechecked.
+- Left reusable, gitignored dev scripts at `src/_test-websearch.ts` and `src/_test-benchmark.ts` (pattern: `src/_test-*.ts`, already in `.gitignore`) so the user can re-run them anytime without asking — more `_test-<agent>.ts` scripts will be added per agent as Phase 4 continues.
 
 ## Decisions made
 
@@ -20,6 +22,13 @@ Last updated: 2026-07-28
 - `getLLM(tier)` → `getLLM(tier, maxTokens)` — now required on every call, mapped per-provider (`maxOutputTokens` for Gemini, `maxTokens` for OpenAI/Anthropic) to satisfy the "always bound maxTokens" rule. **Every future `getLLM()` call site (4.2 onward) must pass this second argument.**
 - `search()` in `search.tool.ts` gained an optional second param `{ timeRange?, includeDomains? }`, passed through to Tavily's `.invoke()`. Backward-compatible — existing `benchmarkScraperTool`/`pricingScraperTool` calls are unaffected.
 - WebSearch's per-source Tavily queries deliberately exclude the Benchmarks/Pricing source groups from `architecture.md` — those belong to the 4.2/4.3 agents.
+- Benchmark agent's significance threshold uses `Math.abs(delta) > 2` (either direction), not just increases — matches project-overview.md's "significant deltas (>2 points)" wording and email-design.md's mention of "significant benchmark drops" needing the same red-flag treatment as rises.
+- Delta calc matches previous vs current scores by a `modelName::benchmark` composite key (plain Map, not a DB query) — simple and correct since both come from the same-shaped `BenchmarkScore[]`.
+- Every agent's catch block (and any non-fatal error return) must return ONLY the new error(s) — `errors: [message]`, never `errors: [...state.errors, message]`. The `errors` field's reducer in `state.ts` already appends; re-spreading `state.errors` duplicates every prior error on each subsequent failure. **This applies project-wide, retroactively fixed in `webSearch.agent.ts` too — apply from the start in 4.3/4.4/4.5/4.6, never introduce the spread pattern.**
+- Scraper tools that fan out multiple queries (`benchmarkScraperTool`, and by extension `pricingScraperTool` when it's revisited) must use `Promise.allSettled`, not `Promise.all`, and return `{ items, errors }` rather than a bare array — one failing query must never discard the others' results.
+- `search()` in `search.tool.ts` now returns `{ items: RawItem[]; droppedCount: number }` instead of a bare array (breaking change) — every caller must destructure and, if it tracks an `errors[]`, log `"search: skipped N unparseable URLs (<label>)"` when `droppedCount > 0`. `pricingScraper.tool.ts` was only patched to compile (`.items` unwrapped, count ignored) since its agent doesn't exist yet — give it full error-surfacing treatment in 4.3.
+- A snapshot write is skipped (not performed) whenever fewer than `MIN_SNAPSHOT_ITEMS` (5) items were extracted — the previous snapshot remains the diff baseline, and a `"<Agent>: low-yield extraction (N items), snapshot not saved"` message goes to `errors[]`. Applies to both `BenchmarkSnapshot` and (in 4.3) `PricingSnapshot`.
+- Delta/score dedup key collapsing must sort by `source` first, then keep the last entry per key in a `Map` — deterministic regardless of original array order. Same pattern needed for Pricing's `modelName::provider` key in 4.3.
 
 ## Problems solved
 
@@ -29,22 +38,28 @@ Last updated: 2026-07-28
 - Gemini 3.x model IDs (postdate this agent's training cutoff) were verified live against Google's docs, then confirmed correct by the user: `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`.
 - **Gemini's structured-output schema converter rejects a `.nullable()` Zod field** — `getLLM("cheap", ...).withStructuredOutput(schema)` threw a 400 ("Proto field is not repeating, cannot start list") on `publishedAt: z.string().nullable()`. Fixed by using `.optional()` instead (works across all three providers) and normalizing `undefined → null` in code after the call. **This pattern (`.optional()`, never `.nullable()`) must be reused in every future `withStructuredOutput()` schema in this project** — it will recur in 4.2 (Benchmark), 4.3 (Pricing), and 4.4 (Synthesis) wherever an optional field exists.
 - MongoDB Atlas rejected the connection until the user added their current IP to the cluster's Network Access whitelist — a one-time dev-environment step, not a code issue.
+- `LLM_MODEL_CHEAP=gemini-2.5-flash-lite` (in `.env` since Phase 1) started returning a live 404 ("no longer available to new users") during 4.2 testing — a Google-side deprecation, not a code bug. Per user decision, updated to `gemini-3.5-flash-lite` in `.env` (matches what a prior session had already confirmed as correct but `.env` had never been updated to reflect — watch for this drift between memory and actual `.env` values going forward).
+- **Shared tool bug in `search.tool.ts`:** `new URL(r.url).hostname` threw uncaught `TypeError: Invalid URL` whenever Tavily returned a relative redirect URL (e.g. `/goto?url=CAESaAH...`) instead of an absolute one — reproduced consistently on the LiveBench query, surfaced by the user manually re-running `_test-benchmark.ts`. Fixed by wrapping the per-result URL parse in try/catch and silently skipping any result with an unparseable URL (it can't be cited as a source anyway). This tool is shared by WebSearch, Benchmark, and the upcoming Pricing agent — re-verified both existing callers live post-fix with no regression. **Keep this defensive pattern in mind for 4.3** — Tavily's redirect-URL quirk can surface on any query, not just LiveBench.
+- A formal code review of `benchmark.agent.ts` (via `/code-review`) found 6 real issues beyond the URL bug above — see Decisions made for the fixes and the What-was-built entry for the summary. All 6 are now permanent rules in `architecture.md` (13–16) and `code-standards.md`, not just one-off patches — read those sections fresh in 4.3, don't rely on memory of "what benchmark.agent.ts does" since it changed again after the review.
 
 ## Current state
 
-- Phases 1, 2, 3 fully complete; Phase 4.1 complete — all live-verified (see `context/progress-tracker.md` for exact live test output).
+- Phases 1, 2, 3 fully complete; Phase 4.1 and 4.2 complete — all live-verified (see `context/progress-tracker.md` for exact live test output).
 - Live test result for 4.1: 71 raw Tavily hits across 17 source queries → 30 cleaned `RawItem[]`, 0 errors, ~22s run time.
-- `.env` has real values for MongoDB, Tavily, Gemini, OpenAI, Resend, and digest-to-email. `ANTHROPIC_API_KEY` is intentionally blank (user's Anthropic account currently has an issue) — handled gracefully.
+- Live test result for 4.2: two consecutive live runs (~21s apart) — first extracted 42 scores with all-null deltas (no prior snapshot), second extracted 51 scores and computed real deltas against the first run's just-saved snapshot (mostly `delta: 0`, as expected for real leaderboards 21 seconds apart). Confirms extraction, snapshot read/diff/save all work end-to-end.
+- Post-code-review re-verification: benchmark agent run produced 21 deltas, 0 duplicate `modelName::benchmark` keys, `errors: []`, deltas correctly matched the real prior snapshot. WebSearch agent re-tested afterward with no regression (6 items, 0 errors) since it shares the now-changed `search.tool.ts` return type and the error-accumulation fix.
+- `.env` has real values for MongoDB, Tavily, Gemini, OpenAI, Resend, and digest-to-email. `ANTHROPIC_API_KEY` is intentionally blank (user's Anthropic account currently has an issue) — handled gracefully. `LLM_MODEL_CHEAP` is now `gemini-3.5-flash-lite` (was `gemini-2.5-flash-lite`, deprecated — see Problems solved).
 - `RESEND_FROM` is `onboarding@mayeonalabs.com` (user's own custom domain). Domain still needs to be confirmed as added + DNS-verified in the Resend dashboard before Phase 5 send — not yet confirmed either way.
 - Standing workflow agreement: stop after each individual build-plan checklist item (not each phase) for manual testing before starting the next one. Also saved in the separate persistent auto-memory system.
 
 ## Next session starts with
 
-**Phase 4.2 — Benchmark agent** (`src/agents/benchmark.agent.ts`). Re-read the Benchmark sections of `project-overview.md` and `architecture.md` first. Carry forward from 4.1:
-- Call `getLLM("cheap", maxTokens)` — the second argument is now required.
-- Any optional field in the Zod schema passed to `.withStructuredOutput()` must be `.optional()`, not `.nullable()` (Gemini rejects nullable).
-- Behaviour per build-plan.md 4.2: call `benchmarkScraperTool()`, read the most recent `BenchmarkSnapshot` from MongoDB (`.sort({date: -1}).findOne()`), calculate deltas per model/benchmark, flag deltas > 2 points as significant, save the new snapshot, return `BenchmarkDelta[]`.
-- Build only this one checklist item, then stop for manual testing before starting 4.3.
+**Phase 4.3 — Pricing agent** (`src/agents/pricing.agent.ts`). Re-read the Pricing sections of `project-overview.md` and `architecture.md` first. Carry forward from 4.1/4.2:
+- Call `getLLM("cheap", maxTokens)` — the second argument is required.
+- Any optional field in a Zod schema passed to `.withStructuredOutput()` must be `.optional()`, not `.nullable()` (Gemini rejects nullable).
+- Follow the **post-review** shape of `benchmark.agent.ts` (not the original) — re-read that file directly, don't reconstruct from an earlier memory snapshot. Key carryovers: `pricingScraperTool()` needs its own `Promise.allSettled` + `{items, errors}` return (currently it's still `Promise.all` over 3 static pricing URLs — decide whether that even needs `allSettled` given it's not fan-out queries the same way, but it must at least destructure `search()`'s new `{items, droppedCount}` shape properly and surface drops to `errors[]`, unlike the current compile-only patch); dedupe extracted prices by `modelName::provider` (sorted by source, last-write-wins) before diffing/saving; skip the `PricingSnapshot` save (keep old baseline) if fewer than 5 prices extracted, logging `"Pricing: low-yield extraction (N items), snapshot not saved"`; flag ANY price change as significant (build-plan.md 4.3: "price moves are rare and always worth noting" — no >2 threshold here, unlike Benchmark); catch block returns only `[message]`, never spreads `state.errors`.
+- `PricingSnapshot` Mongoose model doesn't exist yet — `architecture.md` defines the schema (`date`, `prices: [{modelName, provider, inputPer1M, outputPer1M, source}]`, `createdAt`) but only `digest.model.ts` and `benchmarkSnapshot.model.ts` exist in `src/db/` so far. Create `src/db/pricingSnapshot.model.ts` first, matching the `benchmarkSnapshot.model.ts` pattern (typed document export, `{_id: false}` on the sub-schema).
+- Build only this one checklist item, then stop for manual testing before starting 4.4.
 
 ## Open questions
 

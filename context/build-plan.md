@@ -142,6 +142,7 @@ File: `src/tools/benchmarkScraper.tool.ts`
 - Instead, in this order of preference:
   1. Use a JSON/API endpoint if the source exposes one (e.g. HuggingFace datasets API).
   2. If none, use the search tool to find recent benchmark results as `RawItem[]` and let the Benchmark agent read scores from the text.
+- **Run the three leaderboard queries with `Promise.allSettled`, not `Promise.all`.** If one query fails, keep the results from the others and record the failed query. One rate-limited source must never zero out the whole run.
 - Returns raw score array `{ modelName, benchmark, score, source }[]` — delta calculation happens in the Benchmark agent.
 
 ### 3.4 — Pricing scraper tool
@@ -149,6 +150,7 @@ File: `src/tools/pricingScraper.tool.ts`
 - Fetches provider pricing pages listed in `architecture.md`
 - Parses into `{ modelName, provider, inputPer1M, outputPer1M, source }[]`
 - Same fallback rule as 3.3: if a page is JS-rendered, use the search tool instead.
+- **Use `Promise.allSettled` across the pricing pages**, never `Promise.all` — keep partial results, log failed pages.
 - Returns raw price array — delta calculation happens in the Pricing agent.
 
 **Phase 3 exit check:** All four tools can be called in isolation (small test script) and return correctly typed data.
@@ -175,10 +177,11 @@ File: `src/agents/benchmark.agent.ts`
 
 Behaviour:
 - Calls the benchmark scraper tool
+- **Dedupes scores by `modelName::benchmark`** before diffing — cross-citing sources produce the same pair twice
 - Reads the most recent `BenchmarkSnapshot` from MongoDB
 - Calculates deltas: `currentScore - previousScore` per model per benchmark
 - Flags deltas > 2 points as significant
-- Saves the new snapshot to MongoDB
+- **Guard before saving:** only save the new snapshot if it has ≥ 5 scores. If fewer, skip the save, keep the old baseline, and log a low-yield error. Never overwrite history with a bad scrape.
 - Returns `BenchmarkDelta[]` added to state as `benchmarkDeltas`
 
 ### 4.3 — Pricing agent
@@ -186,10 +189,11 @@ File: `src/agents/pricing.agent.ts`
 
 Behaviour:
 - Calls the pricing scraper tool
+- **Dedupes prices by `modelName::provider`** before diffing
 - Reads the most recent `PricingSnapshot` from MongoDB
 - Calculates deltas: `currentPrice - previousPrice` per model
 - Flags any change (price moves are rare and always worth noting)
-- Saves the new snapshot to MongoDB
+- **Guard before saving:** only save the new snapshot if it has ≥ 5 prices. If fewer, skip the save, keep the old baseline, and log a low-yield error.
 - Returns `PricingDelta[]` added to state as `pricingDeltas`
 
 ### 4.4 — Synthesis agent

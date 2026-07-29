@@ -214,6 +214,10 @@ One document per run. Lets the digest say "Gemini Flash price dropped since last
 10. **Never use `require()`.** ESM imports only throughout the project.
 11. **Always use the cheap model tier for extraction, the premium tier for reasoning.** WebSearch and Benchmark agents do simple extraction — use the cheap model. Synthesis and Personalization do real reasoning — use the premium model. Two env vars control this: `LLM_MODEL_CHEAP` and `LLM_MODEL_PREMIUM`.
 12. **Always dedupe against the last 7 days of digests, not just yesterday.** A story can resurface mid-week. Read the last 7 `DigestRecord` docs and skip any URL already covered.
+13. **Never overwrite a snapshot with a near-empty extraction.** Before saving a `BenchmarkSnapshot` or `PricingSnapshot`, require a minimum of 5 extracted items. If fewer, skip the save, keep yesterday's snapshot as the baseline, and log `"<agent>: low-yield extraction (N items), snapshot not saved"` to `errors[]`. A bad scrape must never destroy the diff history.
+14. **Always dedupe deltas by their natural key before diffing and saving.** For benchmarks the key is `modelName::benchmark`; for pricing it is `modelName::provider`. Cross-citing sources produce the same pair twice — collapse duplicates deterministically (last write wins after sorting by source) before computing deltas or writing the snapshot.
+15. **Scraper tools must use `Promise.allSettled`, never `Promise.all`.** One failing query (e.g. a rate-limited source) must not discard the successful ones. Keep partial results and log the failed queries to `errors[]` — mirror how `webSearchAgent` handles per-source failure.
+16. **Agents return only their NEW errors, never the accumulated list.** The `errors` reducer appends. Return `[message]`, not `[...state.errors, message]`, or every prior error duplicates on each failure.
 
 ---
 
@@ -226,7 +230,7 @@ One document per run. Lets the digest say "Gemini Flash price dropped since last
   "@langchain/google-genai": "latest",
   "@langchain/openai": "latest",
   "@langchain/anthropic": "latest",
-  "@langchain/tavily": "latest",
+  "@langchain/community": "latest",
   "mongoose": "latest",
   "resend": "latest",
   "node-cron": "latest",
