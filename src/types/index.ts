@@ -42,6 +42,7 @@ export type PricingDelta = {
   newInputPer1M: number;
   oldOutputPer1M: number | null;
   newOutputPer1M: number;
+  significant: boolean;
   source: string;
 };
 

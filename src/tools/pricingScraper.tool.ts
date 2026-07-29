@@ -15,23 +15,52 @@ const PRICING_SOURCES: { url: string; provider: string }[] = [
   { url: "https://ai.google.dev/pricing", provider: "google" },
 ];
 
-export async function pricingScraperTool(): Promise<RawItem[]> {
-  const results = await Promise.all(
-    PRICING_SOURCES.map(async ({ url, provider }): Promise<RawItem[]> => {
-      const text = await webFetch(url);
-      if (text !== null && text.length >= MIN_USABLE_TEXT_LENGTH) {
-        return [
-          {
-            title: `${provider} pricing`,
-            url,
-            source: new URL(url).hostname,
-            summary: text,
-            publishedAt: null,
-          },
-        ];
-      }
-      return (await search(`${provider} API pricing per 1M tokens`)).items;
-    }),
+export type PricingScraperResult = {
+  items: RawItem[];
+  errors: string[];
+};
+
+// Promise.allSettled — one source failing must not discard the other two providers' results.
+export async function pricingScraperTool(): Promise<PricingScraperResult> {
+  const settled = await Promise.allSettled(
+    PRICING_SOURCES.map(
+      async ({ url, provider }): Promise<{ items: RawItem[]; droppedCount: number }> => {
+        const text = await webFetch(url);
+        if (text !== null && text.length >= MIN_USABLE_TEXT_LENGTH) {
+          return {
+            items: [
+              {
+                title: `${provider} pricing`,
+                url,
+                source: new URL(url).hostname,
+                summary: text,
+                publishedAt: null,
+              },
+            ],
+            droppedCount: 0,
+          };
+        }
+        return search(`${provider} API pricing per 1M tokens`);
+      },
+    ),
   );
-  return results.flat();
+
+  const items: RawItem[] = [];
+  const errors: string[] = [];
+
+  settled.forEach((result, i) => {
+    const { provider } = PRICING_SOURCES[i];
+    if (result.status === "fulfilled") {
+      items.push(...result.value.items);
+      if (result.value.droppedCount > 0) {
+        errors.push(`search: skipped ${result.value.droppedCount} unparseable URLs (${provider})`);
+      }
+    } else {
+      const reason =
+        result.reason instanceof Error ? result.reason.message : String(result.reason);
+      errors.push(`pricingScraper: ${provider} failed - ${reason}`);
+    }
+  });
+
+  return { items, errors };
 }
