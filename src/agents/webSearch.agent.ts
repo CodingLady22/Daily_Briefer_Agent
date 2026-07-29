@@ -70,7 +70,14 @@ async function fetchRawItems(): Promise<{ items: RawItem[]; errors: string[] }> 
   const batches = await Promise.all(
     SOURCE_QUERIES.map(async ({ domain, query }): Promise<RawItem[]> => {
       try {
-        return await search(query, { timeRange: "day", includeDomains: [domain] });
+        const { items, droppedCount } = await search(query, {
+          timeRange: "day",
+          includeDomains: [domain],
+        });
+        if (droppedCount > 0) {
+          errors.push(`search: skipped ${droppedCount} unparseable URLs (${domain})`);
+        }
+        return items;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         errors.push(`WebSearch: ${domain} query failed: ${message}`);
@@ -98,7 +105,7 @@ export async function webSearchAgent(
   const candidates = dedupeByUrl(rawBatches).filter((item) => !seenUrls.has(item.url));
 
   if (candidates.length === 0) {
-    return { rawItems: [], errors: [...state.errors, ...fetchErrors] };
+    return { rawItems: [], errors: fetchErrors };
   }
 
   try {
@@ -113,13 +120,13 @@ export async function webSearchAgent(
         publishedAt: item.publishedAt ?? null,
       }),
     );
-    return { rawItems: cleaned, errors: [...state.errors, ...fetchErrors] };
+    return { rawItems: cleaned, errors: fetchErrors };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // Fall back to the raw, unclean items rather than losing the run's content entirely.
     return {
       rawItems: candidates,
-      errors: [...state.errors, ...fetchErrors, `WebSearch: LLM extraction failed: ${message}`],
+      errors: [...fetchErrors, `WebSearch: LLM extraction failed: ${message}`],
     };
   }
 }

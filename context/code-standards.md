@@ -89,7 +89,7 @@ Agents only return the fields they are responsible for updating. They never muta
 
 - Every `try/catch` must do one of two things: re-throw, or push to `state.errors[]`.
 - Never log an error and continue silently.
-- Use this pattern for non-fatal agent errors:
+- **Return only the NEW error, never the accumulated list.** The `errors` reducer in `state.ts` appends (`(curr, next) => [...curr, ...next]`). If you return `[...state.errors, message]`, the reducer appends everything again and every prior error is duplicated. Return just `[message]` and let the reducer do the appending.
 
 ```ts
 try {
@@ -97,7 +97,7 @@ try {
   return { rawItems: items }
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err)
-  return { errors: [...state.errors, `WebSearch: ${message}`] }
+  return { errors: [`WebSearch: ${message}`] } // just the new one — reducer appends
 }
 ```
 

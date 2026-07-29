@@ -30,7 +30,7 @@ export async function pricingScraperTool(): Promise<RawItem[]> {
           },
         ];
       }
-      return search(`${provider} API pricing per 1M tokens`);
+      return (await search(`${provider} API pricing per 1M tokens`)).items;
     }),
   );
   return results.flat();

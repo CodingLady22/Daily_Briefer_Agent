@@ -13,9 +13,32 @@ const BENCHMARK_QUERIES = [
   "LiveBench leaderboard latest model scores",
 ];
 
-export async function benchmarkScraperTool(): Promise<RawItem[]> {
-  const results = await Promise.all(
-    BENCHMARK_QUERIES.map((query) => search(query)),
-  );
-  return results.flat();
+export type BenchmarkScraperResult = {
+  items: RawItem[];
+  errors: string[];
+};
+
+// Promise.allSettled — one query failing (e.g. a rate-limited source) must not
+// discard the other two's results.
+export async function benchmarkScraperTool(): Promise<BenchmarkScraperResult> {
+  const settled = await Promise.allSettled(BENCHMARK_QUERIES.map((query) => search(query)));
+
+  const items: RawItem[] = [];
+  const errors: string[] = [];
+
+  settled.forEach((result, i) => {
+    const query = BENCHMARK_QUERIES[i];
+    if (result.status === "fulfilled") {
+      items.push(...result.value.items);
+      if (result.value.droppedCount > 0) {
+        errors.push(`search: skipped ${result.value.droppedCount} unparseable URLs (${query})`);
+      }
+    } else {
+      const reason =
+        result.reason instanceof Error ? result.reason.message : String(result.reason);
+      errors.push(`benchmarkScraper: ${query} failed - ${reason}`);
+    }
+  });
+
+  return { items, errors };
 }

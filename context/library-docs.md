@@ -256,6 +256,8 @@ const last = await BenchmarkSnapshot.findOne().sort({ date: -1 }).lean();
 - Always `await` every DB call — never fire-and-forget.
 - Dedup always looks back 7 days — never just yesterday. A story can resurface mid-week.
 - Snapshot reads always use `.sort({ date: -1 }).findOne()` to get the latest — never assume order.
+- **Never save a snapshot with fewer than 5 items.** A low-yield scrape (LLM off day, rate limit, truncated response) must not overwrite the baseline — skip the save, keep yesterday's, log it. Losing the baseline silently corrupts every future diff.
+- **Dedupe by natural key before saving a snapshot** (`modelName::benchmark` / `modelName::provider`). Duplicate rows skew the next day's diff non-deterministically depending on array order.
 - Save the new benchmark and pricing snapshots **before** the run ends, so tomorrow has something to diff against.
 
 ---
@@ -389,46 +391,41 @@ export async function webFetch(url: string): Promise<string | null> {
 
 ## Tavily (search tool)
 
-**Check first:** Check AGENT.md for a Tavily skill. Tavily ships via its own dedicated
-`@langchain/tavily` package — **not** `@langchain/community`, which is fully deprecated
-upstream as of this project's build (confirmed via npm registry metadata). If a Tavily
-skill or MCP server is configured, prefer its guidance over this section; it will have
-more current API details than this file.
+**Check first:** Check AGENT.md for a Tavily skill. Tavily ships via `@langchain/community`.
 
 ### Searching
 
 ```typescript
 // src/tools/search.tool.ts
-import { TavilySearch } from "@langchain/tavily";
+import { TavilySearchResults } from "@langchain/community/tools/tavily_search";
 import { config } from "../config/index.js";
 import type { RawItem } from "../types/index.js";
 
-const tavily = new TavilySearch({
-  tavilyApiKey: config.tavilyApiKey,
+const tavily = new TavilySearchResults({
+  apiKey: config.tavilyApiKey,
   maxResults: 5,
 });
 
 export async function search(query: string): Promise<RawItem[]> {
-  const response = await tavily.invoke({ query });
-  if ("error" in response) {
-    return []; // Tavily returned an error payload instead of results
-  }
-  return response.results.map((r) => ({
+  const raw = await tavily.invoke(query);
+  const parsed = JSON.parse(raw) as Array<{
+    title: string;
+    url: string;
+    content: string;
+  }>;
+  return parsed.map((r) => ({
     title: r.title,
     url: r.url,
     source: new URL(r.url).hostname,
     summary: r.content,
-    publishedAt: null, // Tavily does not return a publish date on search results
+    publishedAt: null, // Tavily does not always return a date
   }));
 }
 ```
 
 **Rules:**
 
-- `tavily.invoke({ query })` returns a typed object directly (`{ results: [...] }` or
-  `{ error: string }`) — no `JSON.parse` needed, unlike the old deprecated tool.
-- `publishedAt` is always missing from Tavily search results — the WebSearch agent must
-  handle a null date, not assume one.
-- Search is the fallback for JS-rendered pages that `webFetch` can't read — benchmark and
-  pricing agents lean on it.
+- Tavily returns a JSON **string** — always `JSON.parse` it, never use it raw.
+- `publishedAt` is often missing — the WebSearch agent must handle a null date, not assume one.
+- Search is the fallback for JS-rendered pages that `webFetch` can't read — benchmark and pricing agents lean on it.
 - Keep `maxResults` small (5) — this is a cost and noise control.

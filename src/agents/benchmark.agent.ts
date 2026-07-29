@@ -8,8 +8,12 @@ import { BENCHMARK_SYSTEM_PROMPT } from "./benchmark.prompt.js";
 import type { DigestStateType } from "../graph/state.js";
 import type { BenchmarkDelta, BenchmarkScore } from "../types/index.js";
 
-const MAX_TOKENS = 4096;
+// Scales with leaderboard coverage — live runs have already extracted 40-50+
+// scores in one structured-output pass. If a parse ever fails on length, chunk
+// the extraction into multiple calls rather than raising this indefinitely.
+const MAX_TOKENS = 8192;
 const SIGNIFICANT_DELTA_THRESHOLD = 2;
+const MIN_SNAPSHOT_ITEMS = 5;
 
 const BenchmarkScoreSchema = z.object({
   modelName: z.string(),
@@ -24,6 +28,18 @@ const BenchmarkScoresSchema = z.object({
 
 function scoreKey(modelName: string, benchmark: string): string {
   return `${modelName}::${benchmark}`;
+}
+
+// Cross-citing sources (e.g. a HELM page quoting Arena numbers) can yield the same
+// model+benchmark pair more than once. Sort by source first so collapsing to one
+// row per key is deterministic — last write (alphabetically last source) wins.
+function dedupeScores(scores: BenchmarkScore[]): BenchmarkScore[] {
+  const sorted = [...scores].sort((a, b) => a.source.localeCompare(b.source));
+  const byKey = new Map<string, BenchmarkScore>();
+  for (const score of sorted) {
+    byKey.set(scoreKey(score.modelName, score.benchmark), score);
+  }
+  return [...byKey.values()];
 }
 
 // Diffs current scores against the previous snapshot, per model per benchmark.
@@ -58,19 +74,31 @@ export async function benchmarkAgent(
   state: DigestStateType,
 ): Promise<Partial<DigestStateType>> {
   try {
-    const rawItems = await benchmarkScraperTool();
+    const { items: rawItems, errors: scraperErrors } = await benchmarkScraperTool();
 
     const llm = getLLM("cheap", MAX_TOKENS).withStructuredOutput(BenchmarkScoresSchema);
     const extracted = await llm.invoke([
       new SystemMessage(BENCHMARK_SYSTEM_PROMPT),
       new HumanMessage(JSON.stringify(rawItems)),
     ]);
-    const currentScores: BenchmarkScore[] = extracted.scores;
+    const currentScores = dedupeScores(extracted.scores);
 
     const previousSnapshot = await BenchmarkSnapshot.findOne().sort({ date: -1 }).lean();
     const previousScores: BenchmarkScore[] = previousSnapshot?.scores ?? [];
 
     const benchmarkDeltas = calculateDeltas(currentScores, previousScores);
+
+    if (currentScores.length < MIN_SNAPSHOT_ITEMS) {
+      // A bad scrape must never destroy the diff history — skip the write and
+      // keep the previous snapshot as tomorrow's baseline.
+      return {
+        benchmarkDeltas,
+        errors: [
+          ...scraperErrors,
+          `Benchmark: low-yield extraction (${currentScores.length} scores), snapshot not saved`,
+        ],
+      };
+    }
 
     // Save before the run ends so tomorrow's run has something to diff against.
     await BenchmarkSnapshot.create({
@@ -78,9 +106,9 @@ export async function benchmarkAgent(
       scores: currentScores,
     });
 
-    return { benchmarkDeltas };
+    return { benchmarkDeltas, errors: scraperErrors };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { errors: [...state.errors, `Benchmark: ${message}`] };
+    return { errors: [`Benchmark: ${message}`] };
   }
 }
