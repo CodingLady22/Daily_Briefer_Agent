@@ -257,7 +257,7 @@ const last = await BenchmarkSnapshot.findOne().sort({ date: -1 }).lean();
 - Dedup always looks back 7 days — never just yesterday. A story can resurface mid-week.
 - Snapshot reads always use `.sort({ date: -1 }).findOne()` to get the latest — never assume order.
 - **Never save a snapshot with fewer than 5 items.** A low-yield scrape (LLM off day, rate limit, truncated response) must not overwrite the baseline — skip the save, keep yesterday's, log it. Losing the baseline silently corrupts every future diff.
-- **Dedupe by natural key before saving a snapshot** (`modelName::benchmark` / `modelName::provider`). Duplicate rows skew the next day's diff non-deterministically depending on array order.
+- **Dedupe by natural key before saving a snapshot** (`modelName::benchmark` / `modelName::provider`). Duplicate rows skew the next day's diff non-deterministically depending on array order. The key is built via the shared `normalizeKey()` helper (`src/utils/key.ts`) — lowercases, trims, and collapses spaces/underscores so casing/formatting drift doesn't create a false new entry — but the stored/displayed `modelName` always stays the original, non-normalized value from extraction.
 - Save the new benchmark and pricing snapshots **before** the run ends, so tomorrow has something to diff against.
 
 ---
