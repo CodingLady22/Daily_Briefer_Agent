@@ -5,6 +5,7 @@ import { getLLM } from "../config/index.js";
 import { benchmarkScraperTool } from "../tools/benchmarkScraper.tool.js";
 import { BenchmarkSnapshot } from "../db/benchmarkSnapshot.model.js";
 import { BENCHMARK_SYSTEM_PROMPT } from "./benchmark.prompt.js";
+import { normalizeKey } from "../utils/key.js";
 import type { DigestStateType } from "../graph/state.js";
 import type { BenchmarkDelta, BenchmarkScore } from "../types/index.js";
 
@@ -26,18 +27,16 @@ const BenchmarkScoresSchema = z.object({
   scores: z.array(BenchmarkScoreSchema),
 });
 
-function scoreKey(modelName: string, benchmark: string): string {
-  return `${modelName}::${benchmark}`;
-}
-
 // Cross-citing sources (e.g. a HELM page quoting Arena numbers) can yield the same
 // model+benchmark pair more than once. Sort by source first so collapsing to one
 // row per key is deterministic — last write (alphabetically last source) wins.
+// Keys are normalized (see utils/key.ts) so casing/spacing variants collapse together;
+// the stored score keeps the original, non-normalized modelName for display.
 function dedupeScores(scores: BenchmarkScore[]): BenchmarkScore[] {
   const sorted = [...scores].sort((a, b) => a.source.localeCompare(b.source));
   const byKey = new Map<string, BenchmarkScore>();
   for (const score of sorted) {
-    byKey.set(scoreKey(score.modelName, score.benchmark), score);
+    byKey.set(normalizeKey(score.modelName, score.benchmark), score);
   }
   return [...byKey.values()];
 }
@@ -50,12 +49,12 @@ function calculateDeltas(
 ): BenchmarkDelta[] {
   const previousByKey = new Map<string, number>();
   for (const prev of previousScores) {
-    previousByKey.set(scoreKey(prev.modelName, prev.benchmark), prev.score);
+    previousByKey.set(normalizeKey(prev.modelName, prev.benchmark), prev.score);
   }
 
   return currentScores.map((current) => {
     const previousScore =
-      previousByKey.get(scoreKey(current.modelName, current.benchmark)) ?? null;
+      previousByKey.get(normalizeKey(current.modelName, current.benchmark)) ?? null;
     const delta = previousScore === null ? null : current.score - previousScore;
     const significant = delta !== null && Math.abs(delta) > SIGNIFICANT_DELTA_THRESHOLD;
     return {

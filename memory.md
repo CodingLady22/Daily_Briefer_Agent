@@ -1,4 +1,4 @@
-# Memory — AI Digest Build (Phases 1-3 + Phase 4.1-4.3)
+# Memory — AI Digest Build (Phases 1-3 + Phase 4.1-4.4 + key normalization)
 
 Last updated: 2026-07-29
 
@@ -7,54 +7,60 @@ Last updated: 2026-07-29
 - **Phase 1 scaffold:** `package.json`, `tsconfig.json` (TS 7.0 — dropped `baseUrl`, added explicit `"types": ["node"]`), `.env.example`, `.env`, `src/config/index.ts` (Zod-validated env config + `getLLM(tier, maxTokens)` factory for gemini/openai/anthropic), `src/db/connection.ts`, `src/db/digest.model.ts`, `src/db/benchmarkSnapshot.model.ts`, `src/types/index.ts`, `src/index.ts`.
 - **Phase 2:** `src/graph/state.ts` (`DigestState` annotation), `src/graph/supervisor.ts`, `src/graph/graph.ts` (supervisor → webSearch/benchmark/pricing parallel → synthesis → personalization → emailFormatter → END), six stub agent files in `src/agents/`.
 - **Phase 3 tools:** `src/tools/webFetch.tool.ts`, `search.tool.ts` (Tavily), `benchmarkScraper.tool.ts`, `pricingScraper.tool.ts`.
-- **Phase 4.1 — WebSearch agent:** `src/agents/webSearch.agent.ts` + `webSearch.prompt.ts`. One Tavily query per source from `architecture.md` (excluding Benchmarks/Pricing groups), scoped to last 24h via `timeRange: "day"` + `includeDomains`, deduped by URL, filtered against the last 7 days of `DigestRecord.sourceUrls`, then a single batched cheap-tier LLM cleanup pass.
-- **Phase 4.2 — Benchmark agent:** `src/agents/benchmark.agent.ts` + `benchmark.prompt.ts`. Scrapes leaderboards, extracts `{modelName, benchmark, score, source}` via cheap-tier LLM, dedupes by `modelName::benchmark`, diffs against the last `BenchmarkSnapshot`, flags `|delta| > 2` as significant, guards the snapshot save at ≥5 items. Post-4.2 code review fixed 6 issues (error double-counting, snapshot guard, dedupe-before-diff, `Promise.allSettled`, dropped-URL visibility, token headroom) — now permanent rules in `architecture.md` (13–16) and `code-standards.md`.
-- **Phase 4.3 — Pricing agent:** `src/db/pricingSnapshot.model.ts` (new — mirrors `benchmarkSnapshot.model.ts`, but passes `PricingSnapshotDocument` as an explicit generic to `model<T>()` since `PricingEntry.provider` is a literal union and Mongoose's schema-inferred read type otherwise widens it to plain `string`, which failed `tsc`). `src/agents/pricing.agent.ts` (implemented — was a stub) + `pricing.prompt.ts` (new): calls `pricingScraperTool()`, extracts `{modelName, provider, inputPer1M, outputPer1M, source}` via cheap-tier LLM (provider inferred from source hostname/model naming, since raw items aren't pre-tagged), dedupes by `modelName::provider` (sort-by-source, last-write-wins), diffs against the latest `PricingSnapshot`, guards the save at `MIN_SNAPSHOT_ITEMS = 5`. Added `significant: boolean` to the `PricingDelta` type (`types/index.ts`) — true only when a prior price exists AND differs (no >2 threshold like Benchmark; build-plan.md 4.3 says any price change is worth flagging). Rewrote `pricingScraper.tool.ts`: `Promise.all` → `Promise.allSettled`, returns `{items, errors}`, properly destructures `search()`'s `{items, droppedCount}` shape with drops surfaced to `errors[]`.
-- All of Phases 1–3 plus 4.1–4.3 are **live-verified with real credentials**, not just typechecked.
-- Dev scripts at `src/_test-websearch.ts`, `src/_test-benchmark.ts`, `src/_test-pricing.ts` (pattern: `src/_test-*.ts`, gitignored) let the user re-run any agent standalone without asking — more will be added per agent as Phase 4 continues.
-- Committed as `feat: build pricing agent` (commit `9e5ee0f` on branch `pricingAgent`) — appears to be an auto-commit hook, not something explicitly requested this session; worth confirming that's expected before pushing.
+- **Phase 4.1 — WebSearch agent:** `src/agents/webSearch.agent.ts` + `webSearch.prompt.ts`.
+- **Phase 4.2 — Benchmark agent:** `src/agents/benchmark.agent.ts` + `benchmark.prompt.ts`. Post-4.2 code review fixed 6 issues, now permanent rules in `architecture.md` (13–16) and `code-standards.md`.
+- **Phase 4.3 — Pricing agent:** `src/db/pricingSnapshot.model.ts`, `src/agents/pricing.agent.ts` + `pricing.prompt.ts`, `PricingDelta.significant` field added to `types/index.ts`.
+- **This session — key normalization fix:** New `src/utils/key.ts` exporting `normalizeKey(a, b)` (lowercase, trim, collapse spaces/underscores to single hyphens). Replaces the local `scoreKey`/`priceKey` helpers previously duplicated in `benchmark.agent.ts` and `pricing.agent.ts` — now both import the shared helper and use it everywhere a dedup/diff key is built (dedupe, previous-snapshot lookup, current-vs-previous match). Normalizes ONLY the lookup key; stored/displayed `modelName` always stays the original extracted string. Explicitly NOT fuzzy/edit-distance/embedding matching or LLM canonicalization — those are noted as v2 in a code comment. Codified as an extension to `architecture.md` rule 14 and in `library-docs.md`'s Mongoose dedupe section.
+- **This session — Phase 4.4 Synthesis agent:** `src/agents/synthesis.agent.ts` + `synthesis.prompt.ts` (new). First agent to call `getLLM("premium", 8192)`. Single structured-output LLM call takes `{rawItems, benchmarkDeltas, pricingDeltas}` as one JSON payload, groups into the six `project-overview.md` categories (skips a category entirely if it has zero items — code adds a defensive filter for the same case), writes a 2–4 sentence narrative per category, and produces a `comparisonTable` (mandatory when "Benchmark movements" or "Pricing & rate limit changes" has 2+ items, since both are inherently numeric; optional elsewhere). Item `url` must be copied exactly from the input, never invented. `comparisonTable` uses `.optional()` not `.nullable()` on the Zod schema (Gemini constraint), normalized to `null` in code.
+- Dev script `src/_test-synthesis.ts` added (gitignored, `src/_test-*.ts` pattern) — runs WebSearch + Benchmark + Pricing first (like the real graph fan-out) so Synthesis gets real upstream data, not fixtures.
+- All of Phases 1–3 plus 4.1–4.4 are **live-verified with real credentials**.
+- Auto-committed as `feat: Build synthesis agent and key normalization fix` (commit `bebc4a8`) — confirmed this is an intentional auto-commit hook, not something to second-guess going forward.
 
 ## Decisions made
 
-- Swapped deprecated `@langchain/community` for `@langchain/tavily` project-wide — user approved.
-- `benchmarkScraper.tool.ts` and `pricingScraper.tool.ts` return raw `RawItem[]` material, not pre-structured data — no verified stable JSON API exists for the leaderboards or pricing pages, so structured extraction happens in the Phase 4 agents' cheap-tier LLM calls. Tools stay dumb fetchers; agents own all LLM calls.
-- `getLLM(tier, maxTokens)` — the second argument is required on every call site, mapped per-provider (`maxOutputTokens` for Gemini, `maxTokens` for OpenAI/Anthropic).
-- Any optional field in a Zod schema passed to `.withStructuredOutput()` must be `.optional()`, never `.nullable()` — Gemini's structured-output converter rejects nullable fields with a 400 error. Confirmed to also matter for future schemas (4.4 Synthesis will have optional fields).
-- Every agent's catch block (and any non-fatal error return) returns ONLY the new error(s) — `errors: [message]`, never `errors: [...state.errors, message]`. The `errors` reducer in `state.ts` already appends.
-- Scraper tools that fan out multiple queries/sources use `Promise.allSettled`, not `Promise.all`, and return `{items, errors}` — one failing query/source must never discard the others' results. Applied to both `benchmarkScraper.tool.ts` and (this session) `pricingScraper.tool.ts`.
-- A snapshot write is skipped (previous snapshot kept as baseline) whenever fewer than `MIN_SNAPSHOT_ITEMS` (5) items were extracted — logged as a low-yield message in `errors[]`. Applies to both `BenchmarkSnapshot` and `PricingSnapshot`.
-- Delta/score dedup key collapsing sorts by `source` first, then keeps the last entry per key in a `Map` — deterministic regardless of original array order. Used for `modelName::benchmark` (Benchmark) and `modelName::provider` (Pricing).
-- `PricingDelta` gained a `significant: boolean` field this session (not originally in the Phase 1 type) — true only when a previous price exists and differs. Unlike Benchmark's `Math.abs(delta) > 2` threshold, Pricing flags ANY change per build-plan.md 4.3 ("price moves are rare and always worth noting").
-- Mongoose models whose sub-schema has a literal-union field (like `PricingEntry.provider`) must pass the document type as an explicit generic to `model<T>()`, or `.lean()` reads widen the union to `string` and fail strict-mode `tsc`. `benchmarkSnapshot.model.ts` didn't need this since none of its fields are union types.
-- Standardized on `.env` only — deleted the stale, gitignored `.env.local` (predated `.env`'s current values, had an old `RESEND_FROM`, no code ever read it). User confirmed `mayeonalabs.com` is DNS-verified in Resend, satisfying the Phase 5 send prerequisite.
+- Swapped deprecated `@langchain/community` for `@langchain/tavily` project-wide.
+- Tools stay dumb fetchers (`RawItem[]` only); agents own all LLM extraction via cheap-tier calls (WebSearch/Benchmark/Pricing) or premium-tier calls (Synthesis/Personalization).
+- `getLLM(tier, maxTokens)` — second argument required on every call site.
+- Any optional field in a Zod schema passed to `.withStructuredOutput()` must be `.optional()`, never `.nullable()` — confirmed again this session on Synthesis's `comparisonTable` field.
+- Every agent's catch block returns ONLY the new error(s) — `errors: [message]`, never spreads `state.errors` back in.
+- Scraper tools use `Promise.allSettled`, return `{items, errors}`.
+- Snapshot writes guarded at `MIN_SNAPSHOT_ITEMS = 5`.
+- Dedup/diff keys are now normalized via the shared `normalizeKey()` helper (`src/utils/key.ts`) — lowercase/trim/hyphen-collapse only, no fuzzy matching. Applies to both Benchmark (`modelName::benchmark`) and Pricing (`modelName::provider`).
+- Synthesis is a pure grouping/writing pass over state — no MongoDB read/write of its own.
+- Comparison tables are **mandatory** (not just "when relevant") for Benchmark movements / Pricing sections once they have 2+ items, since those categories are inherently numeric — this is a stricter reading of build-plan.md 4.4 / success criterion #9 than the LLM applied on first pass, tightened via the prompt.
+- `LLM_MODEL_PREMIUM` in `.env` changed twice this session (see Problems solved) — final working value confirmed by the user directly editing `.env`. Cost-tier code architecture (`getLLM("cheap"|"premium")`) is unchanged; only the model string changed.
 
 ## Problems solved
 
-- TypeScript 7.0 removed tsconfig's `baseUrl` — path aliases need `"paths"` without `baseUrl`, plus explicit `"types": ["node"]`.
+- TypeScript 7.0 removed tsconfig's `baseUrl` — needs `"paths"` without `baseUrl` plus explicit `"types": ["node"]`.
 - `@langchain/community` deprecated upstream; moved to `@langchain/tavily`.
-- Gemini's structured-output schema converter rejects `.nullable()` Zod fields — use `.optional()` instead, normalize `undefined → null` after the call.
-- `search.tool.ts`'s `new URL(r.url).hostname` threw on Tavily's occasional relative redirect URLs — fixed by wrapping in try/catch and skipping unparseable results, surfaced via a `droppedCount` return field.
-- A formal code review of `benchmark.agent.ts` found 6 issues (error double-counting, missing snapshot guard, missing dedupe, `Promise.all` vs `allSettled`, silently-dropped URLs, token headroom) — all fixed and codified as permanent architecture/code-standards rules.
-- This session: Mongoose's `.lean()` typing widened `PricingEntry.provider` from its literal union to plain `string`, breaking `tsc` — fixed by passing `PricingSnapshotDocument` as an explicit generic to `model<T>()` in `pricingSnapshot.model.ts`.
-- This session: OpenAI's pricing page (`openai.com/api/pricing`) is JS-rendered exactly as suspected in Phase 3 — confirmed live, the `pricingScraperTool`'s search fallback triggered correctly and returned usable third-party pricing-aggregator sources.
+- Gemini's structured-output schema converter rejects `.nullable()` Zod fields — use `.optional()`, normalize `undefined → null` after the call. Recurred again this session (Synthesis's `comparisonTable`), confirming this is a durable Gemini-wide constraint, not a one-off.
+- `search.tool.ts`'s `new URL(r.url).hostname` threw on relative redirect URLs — fixed with try/catch + `droppedCount` reporting.
+- Post-4.2 code review found and fixed 6 issues (error double-counting, snapshot guard, dedupe-before-diff, `Promise.allSettled`, dropped-URL visibility, token headroom) — codified as permanent rules.
+- Mongoose `.lean()` widened `PricingEntry.provider`'s literal union to `string` — fixed via explicit generic on `model<T>()`.
+- **This session:** LLM-extracted `modelName` casing/formatting isn't stable run-to-run (e.g. `"Gemini 3.6 Flash"` vs `"gemini-3.6-flash"`), causing real dedup/diff misses across days. Fixed with the shared `normalizeKey()` helper — deliberately light (string normalization only), not fuzzy matching. Live-reverified: Benchmark and Pricing agents each ran twice in a row post-fix with 0 errors and correct cross-run matches.
+- **This session:** `LLM_MODEL_PREMIUM=gemini-3.1-pro-preview` (confirmed correct in an earlier session) turned out to have a hard `limit: 0` free-tier quota — not a rate limit, a total block without billing enabled. Next attempt, `gemini-2.5-flash`, hit a 404 "no longer available to new users" (same deprecation class the cheap tier already moved off of). Resolved by the user directly setting `.env` to `LLM_MODEL_CHEAP=gemini-3.1-flash-lite` / `LLM_MODEL_PREMIUM=gemini-3.5-flash-lite`, both confirmed working live. Note premium and cheap are now both "flash-lite" family models (no Pro-tier model currently reachable on this account) — revisit `LLM_MODEL_PREMIUM` if/when a real Pro-tier model becomes available; no code changes needed, just the `.env` value.
+- **This session:** Synthesis's first live output correctly grouped 3 distinct models under "Benchmark movements" but produced no `comparisonTable`, even though build-plan.md 4.4 requires one for 2+ models. Fixed by making the prompt rule compulsory (not conditional on the LLM's judgment) specifically for the two inherently-numeric categories. Re-verified live: table appeared correctly for a 6-model comparison after the fix.
 
 ## Current state
 
-- Phases 1, 2, 3 fully complete; Phase 4.1, 4.2, and 4.3 complete — all live-verified.
-- Live test result for 4.3: two consecutive runs — first extracted 50 prices (Google/Anthropic direct-fetched, OpenAI via search fallback), 0 prior snapshot so all `significant: false`, snapshot saved; second extracted 49 prices, correctly diffed against the first run's snapshot (e.g. Anthropic's "Opus 5" matched exactly, delta none), 0 errors both runs.
-- `.env` is now the single source of truth for environment config (`.env.local` deleted). Real values in place for MongoDB, Tavily, Gemini, OpenAI, Resend, digest-to-email. `ANTHROPIC_API_KEY` intentionally blank (user's Anthropic account has an unresolved issue). `RESEND_FROM` (`onboarding@mayeonalabs.com`) is confirmed DNS-verified in Resend — Phase 5 send prerequisite is now satisfied.
+- Phases 1, 2, 3 fully complete; Phase 4.1, 4.2, 4.3, 4.4 complete — all live-verified.
+- Live test result for 4.4: 3-4 sections produced per run, 0 errors, every item URL traced back to real input data, comparisonTable correctly mandatory for multi-model Benchmark/Pricing sections and correctly absent when a category (e.g. Pricing) had zero significant deltas to report.
+- `.env` real values in place for MongoDB, Tavily, Gemini, OpenAI, Resend, digest-to-email. `ANTHROPIC_API_KEY` intentionally blank (user's Anthropic account has an unresolved issue). `LLM_MODEL_CHEAP=gemini-3.1-flash-lite`, `LLM_MODEL_PREMIUM=gemini-3.5-flash-lite` (both confirmed working). `RESEND_FROM` DNS-verified in Resend.
 - Standing workflow agreement: stop after each individual build-plan checklist item (not each phase) for manual testing before starting the next one.
+- Confirmed: the `feat: ...` auto-commits after each session are an intentional hook, not something to flag going forward.
+- `_test-<agent>.ts` dev scripts are being kept long-term (not just through Phase 4) — useful for diagnosing a failing agent in production during the first couple of weeks post-launch.
 
 ## Next session starts with
 
-**Phase 4.4 — Synthesis agent** (`src/agents/synthesis.agent.ts` + `synthesis.prompt.ts`). Re-read the Synthesis sections of `project-overview.md`, `architecture.md`, and build-plan.md 4.4 first. Carry forward from 4.1–4.3:
-- Call `getLLM("premium", maxTokens)` — Synthesis is the first agent to use the premium tier, not cheap.
+**Phase 4.5 — Personalization agent** (`src/agents/personalization.agent.ts` + `personalization.prompt.ts`). Re-read the Personalization sections of `project-overview.md`, `architecture.md`, and build-plan.md 4.5 first. Carry forward from 4.1–4.4:
+- Call `getLLM("premium", maxTokens)` — same tier as Synthesis.
 - Any optional Zod field passed to `.withStructuredOutput()` must be `.optional()`, not `.nullable()`.
-- Receives `rawItems`, `benchmarkDeltas`, and `pricingDeltas` from state; groups into the six categories from `project-overview.md`; writes a 2–4 sentence narrative per category; outputs a `comparisonTable` (`{headers, rows} | null`) whenever 2+ models/frameworks appear in the same category; every item must carry its source URL (non-negotiable project-wide rule).
-- No MongoDB snapshot/delta logic needed here (that's Benchmark/Pricing's job) — Synthesis is a pure grouping/writing pass over data already in state.
-- Build only this one checklist item, then stop for manual testing before starting 4.5.
+- Receives `sections: DigestSection[]` from state; reorders sections so TypeScript/LangGraph-relevant items surface first (still includes Python-only content, just deprioritized); adds a "Why this matters for you" note (1 sentence) to the top 3 items; marks each item `priority: true`/`false`; returns `PersonalisedDigest` (`{ sections: PersonalisedSection[] }` per `types/index.ts`).
+- Personalisation context to bake into the prompt: LangGraph (JS/TS) agent building, RAG pipelines, WhatsApp-first interfaces, observability (LangSmith/Weave/Phoenix), guardrails (Guardrails AI/NeMo), transitioning into applied AI engineering roles.
+- No MongoDB or tool calls needed — pure reordering/annotation pass over `state.sections`.
+- Build only this one checklist item, then stop for manual testing before starting 4.6.
 
 ## Open questions
 
-- Was the `feat: build pricing agent` commit (9e5ee0f) an intentional auto-commit hook, or should commits be made more explicitly going forward? Worth confirming before this becomes a pattern.
-- Should the `_test-<agent>.ts` dev scripts be consolidated or removed once all of Phase 4 is done, or kept indefinitely as regression-check tools?
+- None outstanding — both open questions from the previous memory (auto-commit hook, `_test-*.ts` script retention) were resolved by the user this session.

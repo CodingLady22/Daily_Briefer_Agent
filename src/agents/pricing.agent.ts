@@ -5,8 +5,9 @@ import { getLLM } from "../config/index.js";
 import { pricingScraperTool } from "../tools/pricingScraper.tool.js";
 import { PricingSnapshot } from "../db/pricingSnapshot.model.js";
 import { PRICING_SYSTEM_PROMPT } from "./pricing.prompt.js";
+import { normalizeKey } from "../utils/key.js";
 import type { DigestStateType } from "../graph/state.js";
-import type { PricingDelta, PricingEntry, PricingProvider } from "../types/index.js";
+import type { PricingDelta, PricingEntry } from "../types/index.js";
 
 const MAX_TOKENS = 4096;
 const MIN_SNAPSHOT_ITEMS = 5;
@@ -23,18 +24,16 @@ const PricingEntriesSchema = z.object({
   prices: z.array(PricingEntrySchema),
 });
 
-function priceKey(modelName: string, provider: PricingProvider): string {
-  return `${modelName}::${provider}`;
-}
-
 // Cross-citing sources (e.g. a search fallback quoting the same price as a direct fetch)
 // can yield the same model+provider pair more than once. Sort by source first so
 // collapsing to one row per key is deterministic — last write (alphabetically last source) wins.
+// Keys are normalized (see utils/key.ts) so casing/spacing variants collapse together;
+// the stored entry keeps the original, non-normalized modelName for display.
 function dedupePrices(prices: PricingEntry[]): PricingEntry[] {
   const sorted = [...prices].sort((a, b) => a.source.localeCompare(b.source));
   const byKey = new Map<string, PricingEntry>();
   for (const price of sorted) {
-    byKey.set(priceKey(price.modelName, price.provider), price);
+    byKey.set(normalizeKey(price.modelName, price.provider), price);
   }
   return [...byKey.values()];
 }
@@ -48,11 +47,12 @@ function calculateDeltas(
 ): PricingDelta[] {
   const previousByKey = new Map<string, PricingEntry>();
   for (const prev of previousPrices) {
-    previousByKey.set(priceKey(prev.modelName, prev.provider), prev);
+    previousByKey.set(normalizeKey(prev.modelName, prev.provider), prev);
   }
 
   return currentPrices.map((current) => {
-    const previous = previousByKey.get(priceKey(current.modelName, current.provider)) ?? null;
+    const previous =
+      previousByKey.get(normalizeKey(current.modelName, current.provider)) ?? null;
     const significant =
       previous !== null &&
       (previous.inputPer1M !== current.inputPer1M ||
