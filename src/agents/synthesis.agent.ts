@@ -8,7 +8,7 @@ import type { DigestSection } from "../types/index.js";
 
 const MAX_TOKENS = 8192;
 
-const CATEGORIES = [
+export const CATEGORIES = [
   "Model releases & updates",
   "Benchmark movements",
   "Framework & tooling news",
