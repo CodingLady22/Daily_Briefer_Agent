@@ -1,6 +1,6 @@
 // Mongoose model for every sent digest email — used for history and 7-day dedup.
 import { Schema, model } from "mongoose";
-import type { DigestSection } from "../types/index.js";
+import type { EmailPayload, PersonalisedSection } from "../types/index.js";
 
 const digestSchema = new Schema({
   date: { type: Date, required: true },
@@ -20,7 +20,9 @@ export type DigestRecordDocument = {
   date: Date;
   subject: string;
   html: string;
-  sections: DigestSection[];
+  // Stores the final PersonalisedSection[] (priority + whyThisMatters included),
+  // not the pre-personalization DigestSection[] — this is what was actually emailed.
+  sections: PersonalisedSection[];
   sourceUrls: string[];
   itemCount: number;
   runDurationMs: number;
@@ -29,3 +31,30 @@ export type DigestRecordDocument = {
 };
 
 export const DigestRecord = model("DigestRecord", digestSchema);
+
+// Builds and saves a DigestRecord from a completed run's final sections + email
+// payload. Decoupled from DigestStateType on purpose — this file stays agnostic
+// of the LangGraph state shape; the caller extracts what it needs from state.
+export async function saveDigestRecord(input: {
+  runDate: string;
+  emailPayload: EmailPayload;
+  sections: PersonalisedSection[];
+  runDurationMs: number;
+  runErrors: string[];
+}): Promise<void> {
+  const sourceUrls = [
+    ...new Set(input.sections.flatMap((section) => section.items.map((item) => item.url))),
+  ];
+  const itemCount = input.sections.reduce((sum, section) => sum + section.items.length, 0);
+
+  await DigestRecord.create({
+    date: new Date(input.runDate),
+    subject: input.emailPayload.subject,
+    html: input.emailPayload.html,
+    sections: input.sections,
+    sourceUrls,
+    itemCount,
+    runDurationMs: input.runDurationMs,
+    runErrors: input.runErrors,
+  });
+}
