@@ -18,3 +18,16 @@ export async function sendDigest(payload: EmailPayload): Promise<void> {
 
   console.log(`Digest sent, id: ${data?.id}`);
 }
+
+export async function sendFailureAlert(reason: string): Promise<void> {
+  const { data, error } = await resend.emails.send({
+    from: config.resendFrom,
+    to: config.digestToEmail,
+    subject: "AI Digest run failed",
+    html: `<p>AI Digest run failed: ${reason}</p>`,
+  });
+
+  if (error) throw new Error(`Resend failed: ${error.message}`);
+
+  console.log(`Failure alert sent, id: ${data?.id}`);
+}
