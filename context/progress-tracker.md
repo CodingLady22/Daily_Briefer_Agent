@@ -7,8 +7,8 @@ Update this file after every completed feature. Any AI agent reading this should
 ## Current Status
 
 **Phase:** 1, 2, 3, 4 complete; Phase 5 in progress
-**Last completed:** 5.1 HTML email template (replaces the 4.6 stub) — live-verified
-**Next:** 5.2 Resend sender (`src/email/sender.ts`)
+**Last completed:** 5.2 Resend sender (`src/email/sender.ts`) — live-verified with a real send
+**Next:** 5.3 Persistence — save `DigestRecord` to MongoDB after a successful send
 
 > All required `.env` values are now in place (Gemini as `LLM_PROVIDER`; `ANTHROPIC_API_KEY` intentionally left blank — see below). `npx tsx src/index.ts` was run live and printed `MongoDB connected` / `AI Digest started` — Phase 1 exit check passed for real. `search.tool.ts`, `benchmarkScraper.tool.ts`, and `pricingScraper.tool.ts` were all live-tested with the real `TAVILY_API_KEY` and returned correctly typed `RawItem[]` data — Phase 3 exit check passed for real.
 > `ANTHROPIC_API_KEY` is blank because of an account issue on the user's side — this is fine as-is. `src/config/index.ts` fully supports all three providers (gemini/openai/anthropic); the schema, refine check, and `getLLM()` switch only require whichever provider's key matches `LLM_PROVIDER`. Do not special-case or comment out Anthropic support again — nothing needs to change here once the account issue clears, just set `LLM_PROVIDER=anthropic` and fill in the key.
@@ -54,6 +54,7 @@ Update this file after every completed feature. Any AI agent reading this should
 > **Resolved (Phase 5.1):** `src/email/template.ts`'s stub body replaced with the real `email-design.md`-compliant renderer — same `renderEmail(digest, runDate): string` signature, zero changes needed in `emailFormatter.agent.ts`. Exports `EMAIL_TOKENS` per the design doc's exact palette/type-scale values. Table-based layout (`<table>`/`<tr>`/`<td>` only, no flexbox/grid), inline styles only, max-width 600px centered, system font stack, dark-purple header, purple section headings with bottom border, pale-red/red-left-border priority styling, footer with ISO run timestamp. All interpolated content (title, summary, narrative, category, url, whyThisMatters, table cells) passed through a local `escapeHtml()` — the WebSearch/Benchmark/Pricing agents' content ultimately comes from live scraped web text, so unescaped `&`/`<`/`>`/quotes could otherwise break the HTML structure.
 > **Design decision, user-confirmed:** email-design.md's "priority items go in a highlighted block at the top" was ambiguous between showing all `priority:true` items (11+ in a typical run) vs. only the guaranteed-≤3 items carrying a `whyThisMatters` note. Asked the user; chose the latter. The top block (`renderSpotlightBlock`) shows only whyThisMatters items with their note in italics. Every `priority:true` item — including ones without a note — still gets the pale-red background + red left border treatment inline within its own category's bullet list (`renderBulletItem`), so no item's priority status is invisible and nothing is duplicated between the top block and the category sections.
 > Live-verified two ways: (1) real pipeline via `_test-emailPreview.ts` (new, gitignored `_test-*.ts`) — 18 rawItems → 47 benchmarkDeltas/24 pricingDeltas → 5 sections → valid 22KB HTML, correct escaping (`&amp;` in category names), priority styling applied, opened in browser. (2) a hand-built fixture via `_test-emailFixture.ts` (new, gitignored) specifically exercising `comparisonTable` rendering (alternating row backgrounds, header row in `accentLight`) and special characters (`"`, `'`, `&`, `<`, `>` in title/summary/url) — confirmed all render escaped and structurally correct, and confirmed a `priority:true` item *without* a note is still red-highlighted in its category list but correctly excluded from the top block. Note: the live pipeline run's own Synthesis output didn't happen to produce a `comparisonTable` this time (known LLM run-to-run non-determinism, logged under Phase 4.4) — the fixture test is what actually proves the table-rendering code path works, independent of that variance. `npx tsc --noEmit` clean both times.
+> **Resolved (Phase 5.2):** `src/email/sender.ts` built — `sendDigest(payload: EmailPayload): Promise<void>` per `library-docs.md`'s Resend pattern. Reads `RESEND_FROM`/`DIGEST_TO_EMAIL` from `config` (never `process.env` directly), checks the `error` field on the response before throwing (Resend doesn't always throw on failure), logs the message ID on success. Scoped to `sendDigest` only per build-plan.md 4.2 — `sendFailureAlert` is explicitly a 5.4 addition to this same file, not built yet. `npx tsc --noEmit` clean. Live-verified with a real send via a throwaway gitignored `_test-sender.ts` (removed after): Resend returned a real message id (`456f8a06-39c2-4f93-a4cf-442719e53296`), no errors.
 
 ---
 
@@ -110,7 +111,7 @@ Do not start a new phase until every item in the current phase is checked.
 ## Phase 5 — Email delivery and persistence
 
 - [x] 5.1 HTML email template — `src/email/template.ts` (inline styles, Gmail-safe)
-- [ ] 5.2 Resend sender — `src/email/sender.ts`
+- [x] 5.2 Resend sender — `src/email/sender.ts` (live-verified with a real send, message id returned)
 - [ ] 5.3 Persistence — `DigestRecord` saved to MongoDB after successful send
 - [ ] 5.4 Failure alert — `sendFailureAlert()` sends a one-line email on fatal error
 - [ ] **Phase 5 exit check passed** — real email received + MongoDB record saved + failure alert works
