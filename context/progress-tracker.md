@@ -7,8 +7,8 @@ Update this file after every completed feature. Any AI agent reading this should
 ## Current Status
 
 **Phase:** 1, 2, 3, 4 complete; Phase 5 in progress
-**Last completed:** 5.3 Persistence (`src/db/digest.model.ts`) — live-verified end to end (real send + real save)
-**Next:** 5.4 Failure alert — `sendFailureAlert()` in `src/email/sender.ts`
+**Last completed:** 5.4 Failure alert (`sendFailureAlert()` in `src/email/sender.ts`) — live-verified with a real Resend send
+**Next:** Phase 5 exit check — real email + MongoDB record + failure alert, all working together
 
 > All required `.env` values are now in place (Gemini as `LLM_PROVIDER`; `ANTHROPIC_API_KEY` intentionally left blank — see below). `npx tsx src/index.ts` was run live and printed `MongoDB connected` / `AI Digest started` — Phase 1 exit check passed for real. `search.tool.ts`, `benchmarkScraper.tool.ts`, and `pricingScraper.tool.ts` were all live-tested with the real `TAVILY_API_KEY` and returned correctly typed `RawItem[]` data — Phase 3 exit check passed for real.
 > `ANTHROPIC_API_KEY` is blank because of an account issue on the user's side — this is fine as-is. `src/config/index.ts` fully supports all three providers (gemini/openai/anthropic); the schema, refine check, and `getLLM()` switch only require whichever provider's key matches `LLM_PROVIDER`. Do not special-case or comment out Anthropic support again — nothing needs to change here once the account issue clears, just set `LLM_PROVIDER=anthropic` and fill in the key.
@@ -58,6 +58,7 @@ Update this file after every completed feature. Any AI agent reading this should
 > **Resolved (Phase 5.3):** Added `saveDigestRecord()` to `src/db/digest.model.ts` per architecture.md rule 3 (all DB writes stay inside `db/`). Deliberately takes plain typed input (`runDate`, `emailPayload`, `sections`, `runDurationMs`, `runErrors`) rather than the whole `DigestStateType` — keeps the `db/` layer decoupled from the LangGraph state shape, matching how nothing else in `db/` imports from `graph/`. Computes `sourceUrls` (deduped via `Set` across every item's `url`) and `itemCount` (total items across sections) from the input; caller times the run and passes `runDurationMs`.
 > **Design decision:** `DigestRecord.sections` stores `PersonalisedSection[]` (the final personalised content — includes `priority`/`whyThisMatters`), not the pre-personalization `DigestSection[]`. Rationale: the record exists to capture what was actually emailed, and Personalization is the last content-shaping step before EmailFormatter. `architecture.md`'s `DigestRecord` schema doc updated to match. `DigestRecordDocument`'s TS type updated accordingly; Mongoose's own schema field stays the loose `{ type: Array }` (no code change needed there).
 > Live-verified end to end via a new gitignored `src/_test-persistence.ts` (kept, not removed, matching the `_test-emailFormatter.ts`/`_test-emailPreview.ts` precedent of keeping reusable pipeline scripts): full graph run (WebSearch/Benchmark/Pricing → Synthesis → Personalization → EmailFormatter) → real `sendDigest()` send → `saveDigestRecord()` → re-queried the just-saved doc from MongoDB to confirm it round-tripped correctly. Result: 20939ms run, `errors: []`, real Resend message id returned, saved record shows `itemCount: 20`, `sourceUrlCount: 20` (all unique, none dropped by the dedup `Set`), `runDurationMs: 20939`, `runErrors: []`. `npx tsc --noEmit` clean.
+> **Resolved (Phase 5.4):** Added `sendFailureAlert(reason: string): Promise<void>` to `src/email/sender.ts`, exactly matching `library-docs.md`'s Resend pattern — plain one-line HTML body (`AI Digest run failed: {reason}`), same `from`/`to` as `sendDigest`, checks the `error` field before throwing (Resend doesn't always throw on failure), logs the message id on success. Deliberately not dressed up per the design rule — its only job is to signal a broken run. `npx tsc --noEmit` clean. Live-verified with a real send via a throwaway gitignored `_test-failureAlert.ts` (removed after, same precedent as `_test-sender.ts` in 5.2 — a simple one-off Resend call, not a reusable pipeline script): real Resend message id returned (`ea300d5c-c53f-45a2-bcdc-aa7ca90c1723`), no errors. The scheduler wiring that actually calls this on a fatal cron error belongs to Phase 6.1, not here — 5.4 only builds and verifies the function itself.
 
 ---
 
@@ -116,7 +117,7 @@ Do not start a new phase until every item in the current phase is checked.
 - [x] 5.1 HTML email template — `src/email/template.ts` (inline styles, Gmail-safe)
 - [x] 5.2 Resend sender — `src/email/sender.ts` (live-verified with a real send, message id returned)
 - [x] 5.3 Persistence — `DigestRecord` saved to MongoDB after successful send (live-verified: real send + real save, itemCount 20, sourceUrlCount 20, errors: [])
-- [ ] 5.4 Failure alert — `sendFailureAlert()` sends a one-line email on fatal error
+- [x] 5.4 Failure alert — `sendFailureAlert()` sends a one-line email on fatal error (live-verified with a real Resend send)
 - [ ] **Phase 5 exit check passed** — real email received + MongoDB record saved + failure alert works
 
 ---
