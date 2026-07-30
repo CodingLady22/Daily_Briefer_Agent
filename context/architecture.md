@@ -113,7 +113,8 @@ Stores every sent email for history and deduplication.
   date: Date,                  // run date
   subject: string,
   html: string,                // full rendered HTML
-  sections: DigestSection[],   // structured content
+  sections: PersonalisedSection[], // final personalised content, as actually emailed
+                                    // (includes priority + whyThisMatters per item)
   sourceUrls: string[],        // all cited URLs
   itemCount: number,
   runDurationMs: number,
