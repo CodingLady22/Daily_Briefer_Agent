@@ -1,42 +1,35 @@
-# Memory — AI Digest Build (Phase 4.5 Personalization agent)
+# Memory — AI Digest Build (Phase 4.6 EmailFormatter agent + Phase 4 exit check)
 
-Last updated: 2026-07-29
+Last updated: 2026-07-30
 
 ## What was built
 
-- **Phase 4.5 — Personalization agent:** `src/agents/personalization.agent.ts` (implemented, replacing the stub) + `src/agents/personalization.prompt.ts` (new). Reorders `DigestSection[]` from Synthesis based on the user's TypeScript/LangGraph/RAG/observability/guardrails/career-transition stack, flags every item `priority: true`/`false`, and adds a `whyThisMatters` note to exactly the top 3 items. Returns `PersonalisedDigest` on state.
-- `src/agents/synthesis.agent.ts`: one-line change — its local `CATEGORIES` const is now `export const CATEGORIES`, so Personalization imports the same category list instead of duplicating it.
-- Dev script `src/_test-personalization.ts` added (gitignored, `src/_test-*.ts` pattern) — chains WebSearch/Benchmark/Pricing → Synthesis → Personalization with real upstream data.
-- `context/progress-tracker.md` updated: 4.5 checked off, detailed session log entry added.
+- **Phase 4.6 — EmailFormatter agent:** `src/agents/emailFormatter.agent.ts` implemented (replacing the stub). Validates the `personalisedDigest` has at least one item across all sections, calls `renderEmail()`, returns `EmailPayload` (`{subject, html}`) on state.
+- `src/email/template.ts` (new) — stubbed ahead of Phase 5.1 (user-approved). Exports `renderEmail(digest: PersonalisedDigest, runDate: string): string` with the exact signature Phase 5.1 specifies, but the body is plain, non-Gmail-safe HTML — no `EMAIL_TOKENS`, no inline styles, no table layout.
+- `src/_test-emailFormatter.ts` (new, gitignored `src/_test-*.ts`) — chains the full pipeline (WebSearch/Benchmark/Pricing → Synthesis → Personalization → EmailFormatter). This run doubles as the Phase 4 exit check.
+- `src/db/digest.model.ts` — renamed the Mongoose schema field (and `DigestRecordDocument` type field) from `errors` to `runErrors`.
+- `context/progress-tracker.md`, `context/architecture.md`, `context/library-docs.md` updated: 4.6 + Phase 4 exit check marked done, `DigestRecord` schema doc corrected, new architecture.md rule 17 added.
 
 ## Decisions made
 
-- Personalization's LLM call is deliberately narrower than Synthesis's: it receives only `{category, items: [{title, url, summary, source}]}` and returns just an ordering + `{url, priority, whyThisMatters?}` annotation per item — it never re-emits title/summary/source, so content can't drift from what Synthesis already cited.
-- `narrative` and `comparisonTable` are copied through untouched from the original `DigestSection` — Personalization never regenerates or reorders a comparisonTable's rows (they're a separate structured summary from Synthesis, not positionally tied to the item list).
-- Matching the LLM's output back to original data is done by `url` (items) and `category` (sections) lookup. Any section or item the LLM's structured output omits is appended back in, undecorated (`priority: false`, no note) — every item/section from the input is guaranteed to survive even if the LLM under-covers.
-- The "top 3 items get a whyThisMatters note" rule (build-plan 4.5) is enforced by instructing the LLM to apply it to the first 3 items of *its own* chosen final order — not by having the code guess which 3 the LLM meant.
-- `whyThisMatters` on the item-annotation Zod schema uses `.optional()`, not `.nullable()` — same Gemini structured-output constraint hit on every prior agent in this project (WebSearch, Benchmark, Synthesis). Normalized to `null` in code.
+- EmailFormatter's "throw if not valid" requirement (build-plan 4.6) is implemented as an internal `throw` caught by the same try/catch → `errors[]` pattern every other agent uses — satisfies architecture.md rule 4 (never send a zero-item email) without breaking the process-never-crashes convention established by every prior agent.
+- `template.ts` stub is a placeholder **body only** — the function signature is already final, so Phase 5.1 will replace the implementation with zero caller changes in `emailFormatter.agent.ts`.
+- `DigestRecord`'s `errors` field renamed to `runErrors` because Mongoose Documents reserve `.errors` internally for `ValidationError` storage — a real collision risk, not cosmetic. This is scoped to Mongoose schema fields only; LangGraph's `DigestState.errors` and every agent's local `errors` variable are unrelated and untouched. Codified as architecture.md rule 17 for any future schema.
 
 ## Problems solved
 
-- None new this session — 4.5 followed the established patterns (optional-not-nullable Zod fields, `errors: [message]` catch blocks, dev test scripts chaining upstream agents) without hitting a new bug.
+- **Mongoose reserved-pathname warning** (user-surfaced): running the new test script printed `` `errors` is a reserved schema pathname `` — traced to `digest.model.ts`'s `DigestRecord` schema (built back in Phase 1.4, first exercised at runtime here since `connectDB()` registers all models on import). Fixed by the `runErrors` rename above; no other code references this field yet (Phase 5.3 persistence isn't built), so it was a clean, isolated fix. Re-verified live: warning gone, chain still runs clean.
 
 ## Current state
 
-- Phases 1, 2, 3 fully complete; Phase 4.1–4.5 complete, all live-verified with real credentials (MongoDB, Tavily, Gemini, Resend).
-- Live test result for 4.5: 27 rawItems → 6 Synthesis sections → 26 total items, 11 flagged priority, exactly 3 with a `whyThisMatters` note, 0 errors, ~2.6s run time. Section order came back stack-relevant-first (Framework & tooling news, Model releases ahead of Research papers/Reliability incidents). `npx tsc --noEmit` clean.
-- Non-blocking observation (not a 4.5 bug): one live run's "Benchmark movements" section had a duplicate `DeepSeek v3 HELM` item (same url/summary) — this originates in Synthesis's own output, same class of LLM extraction non-determinism already logged for Phase 4.3. Not fixed, not in scope for 4.5.
-- Only 4.6 (EmailFormatter) stands between here and the Phase 4 exit check.
+- Phases 1–3 complete. **Phase 4 fully complete (4.1–4.6)** — exit check passed and live-verified twice (once before, once after the Mongoose fix).
+- Latest live run: 23 rawItems → 45 benchmarkDeltas / 32 pricingDeltas → 5 Synthesis sections → 5 Personalization sections → valid `EmailPayload` (7471-char HTML, real `<a href>` source links), `errors: []`, no Mongoose warning. `npx tsc --noEmit` clean.
+- `template.ts` is intentionally **not** Gmail-safe or `email-design.md`-compliant yet — that is real, still-outstanding Phase 5.1 work, not something to assume is done.
 
 ## Next session starts with
 
-**Phase 4.6 — EmailFormatter agent** (`src/agents/emailFormatter.agent.ts`). Re-read the EmailFormatter sections of `build-plan.md` (4.6) and `email-design.md` first (the email is the entire UI — inline styles only, table-based layout, `EMAIL_TOKENS` constants, bullets for items/tables for comparisons). Carry forward:
-- Must validate: at least 1 section with at least 1 item — throw if not (architecture.md rule 4: never send an email with zero items).
-- Renders HTML via `src/email/template.ts` — that file doesn't exist yet; build-plan 4.6 depends on 5.1's template, so check whether 4.6 needs a minimal inline renderer first or whether to pull 5.1 forward. Decide this with the user before writing code, since build-plan.md's phase order has 5.1 in Phase 5, not Phase 4.
-- Returns `EmailPayload` (`{subject, html}`) added to state.
-- This is the last Phase 4 item — completing it triggers the Phase 4 exit check (full graph produces a valid `EmailPayload` with source URLs).
-- Build only this one checklist item, then stop for manual testing per the standing workflow.
+**Phase 5.1 — HTML email template** (`src/email/template.ts`). Replace the Phase 4.6 stub's function body with the real implementation per `email-design.md`: `EMAIL_TOKENS` constants, inline styles only, table-based layout (`<table>`/`<tr>`/`<td>`, no flexbox/grid), max-width 600px, bullets for items, HTML tables for comparisons, priority block styling (pale red, red left border), footer. Keep the existing `renderEmail(digest, runDate): string` signature — `emailFormatter.agent.ts` needs no changes. Then 5.2 (Resend sender), 5.3 (persistence — first real write to `DigestRecord.runErrors`, mapped from `state.errors`), 5.4 (failure alert). Per the stop-after-each-feature workflow, build 5.1 alone and stop for manual testing before starting 5.2.
 
 ## Open questions
 
-- Whether `src/email/template.ts` (build-plan Phase 5.1) needs to be built now, ahead of schedule, so EmailFormatter (Phase 4.6) has something to call — or whether 4.6 should ship a minimal placeholder HTML renderer and defer the real Gmail-safe template to Phase 5.1 as originally planned. Ask the user before starting 4.6.
+- None currently open.

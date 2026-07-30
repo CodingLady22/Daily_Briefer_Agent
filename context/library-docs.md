@@ -222,7 +222,7 @@ const digestSchema = new Schema({
   sourceUrls: { type: [String], default: [] },
   itemCount: { type: Number, default: 0 },
   runDurationMs: { type: Number, default: 0 },
-  errors: { type: [String], default: [] },
+  runErrors: { type: [String], default: [] }, // not `errors` — reserved on Mongoose Documents
   createdAt: { type: Date, default: Date.now },
 });
 
