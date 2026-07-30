@@ -117,7 +117,9 @@ Stores every sent email for history and deduplication.
   sourceUrls: string[],        // all cited URLs
   itemCount: number,
   runDurationMs: number,
-  errors: string[],            // any non-fatal errors during the run
+  runErrors: string[],         // any non-fatal errors during the run — named
+                                // `runErrors`, not `errors`: Mongoose Documents
+                                // reserve `.errors` for ValidationError storage
   createdAt: Date
 }
 ```
@@ -218,6 +220,7 @@ One document per run. Lets the digest say "Gemini Flash price dropped since last
 14. **Always dedupe deltas by their natural key before diffing and saving.** For benchmarks the key is `modelName::benchmark`; for pricing it is `modelName::provider`. Cross-citing sources produce the same pair twice — collapse duplicates deterministically (last write wins after sorting by source) before computing deltas or writing the snapshot. Normalize each key component before building the key: lowercase, trim, and collapse spaces/underscores to single hyphens. Normalize ONLY the match key — always keep the original extracted model name for display in the digest and snapshot. This is deterministic string cleanup, not fuzzy or LLM-based matching.
 15. **Scraper tools must use `Promise.allSettled`, never `Promise.all`.** One failing query (e.g. a rate-limited source) must not discard the successful ones. Keep partial results and log the failed queries to `errors[]` — mirror how `webSearchAgent` handles per-source failure.
 16. **Agents return only their NEW errors, never the accumulated list.** The `errors` reducer appends. Return `[message]`, not `[...state.errors, message]`, or every prior error duplicates on each failure.
+17. **Never name a Mongoose schema field `errors`.** Mongoose Documents reserve `.errors` for `ValidationError` storage — a schema field of that name shadows it and triggers a runtime warning. Use `runErrors` (see `DigestRecord`) or another non-reserved name instead. This applies only to Mongoose schema fields — the unrelated LangGraph `DigestState.errors` field and every agent's local `errors` variable are fine as-is.
 
 ---
 

@@ -10,7 +10,9 @@ const digestSchema = new Schema({
   sourceUrls: { type: [String], default: [] },
   itemCount: { type: Number, default: 0 },
   runDurationMs: { type: Number, default: 0 },
-  errors: { type: [String], default: [] },
+  // Named `runErrors`, not `errors` — Mongoose Documents reserve `.errors` for
+  // ValidationError storage, so a schema field of that name shadows it.
+  runErrors: { type: [String], default: [] },
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -22,7 +24,7 @@ export type DigestRecordDocument = {
   sourceUrls: string[];
   itemCount: number;
   runDurationMs: number;
-  errors: string[];
+  runErrors: string[];
   createdAt: Date;
 };
 
