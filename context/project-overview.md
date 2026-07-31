@@ -17,7 +17,7 @@ Staying current as an applied AI engineer is a full-time job on its own. Models 
 ## Full user flow
 
 ### Step 1 — Trigger (automated)
-A cron job fires Monday through Friday at 7:00am (user's local time, Europe/Rome). It kicks off the LangGraph orchestrator.
+Railway's native cron starts a fresh container Monday through Friday, targeting ~7:00am Europe/Rome (a fixed UTC expression, so it drifts by up to an hour across DST — see `architecture.md`). The container runs the app once end to end and stops when it finishes; there is no always-on process.
 
 ### Step 2 — WebSearch agent runs
 Crawls a curated set of sources (see `architecture.md`) for new content published in the last 24 hours. Collects raw items: title, URL, source, summary snippet, publication date. Stores results in shared LangGraph state.
@@ -80,7 +80,7 @@ Resend sends the HTML email to the user's address. The email record (date, subje
 - LangGraph orchestrator (supervisor pattern)
 - MongoDB for state persistence and digest history
 - Resend for email delivery
-- Cron scheduler (node-cron) running on a Railway VPS
+- Railway's native cron, running the app as a one-shot script (no scheduler library, no always-on process)
 - Rich HTML email template
 - `.env`-based configuration for all secrets and settings
 - TypeScript throughout

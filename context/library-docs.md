@@ -312,48 +312,77 @@ export async function sendFailureAlert(reason: string): Promise<void> {
 
 ---
 
-## node-cron
+## Railway cron (scheduling)
 
-**Check first:** node-cron is stable, but confirm the timezone option is still supported.
+**Check first:** confirm in Railway's current docs that its native cron still
+runs in UTC and still starts a fresh container per trigger (stopping it when
+the process exits).
 
-### Scheduling the run
+There is no scheduling library in this codebase. The app is a **one-shot
+script** (`src/run.ts`) — Railway's own cron feature starts a container, runs
+`npm start` (`tsx src/run.ts`) to completion, and stops the container. The
+schedule (cron expression, e.g. `0 6 * * 1-5`) is configured entirely in the
+Railway service settings, never in code.
+
+### The one-shot entry
 
 ```typescript
-// src/scheduler/cron.ts
-import cron from "node-cron";
-import { config } from "../config/index.js";
-import { digestGraph } from "../graph/graph.js";
-import { sendFailureAlert } from "../email/sender.js";
+// src/run.ts
+import mongoose from "mongoose";
+import { connectDB } from "./db/connection.js";
+import { digestGraph } from "./graph/graph.js";
+import { sendDigest, sendFailureAlert } from "./email/sender.js";
+import { saveDigestRecord } from "./db/digest.model.js";
 
-export function startScheduler(): void {
-  // 0 7 * * 1-5  →  07:00, Monday to Friday
-  cron.schedule(
-    "0 7 * * 1-5",
-    async () => {
-      const start = Date.now();
-      try {
-        console.log("AI Digest run started");
-        await digestGraph.invoke({});
-        console.log(`AI Digest run finished in ${Date.now() - start}ms`);
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        console.error("AI Digest run failed:", reason);
-        await sendFailureAlert(reason); // never let a failure go unnoticed
-      }
-    },
-    { timezone: config.cronTimezone },
-  );
+async function main(): Promise<void> {
+  try {
+    await connectDB();
 
-  console.log("Scheduler started");
+    const start = Date.now();
+    const state = await digestGraph.invoke({});
+    if (!state.emailPayload || !state.personalisedDigest) {
+      throw new Error("Graph did not produce an emailPayload");
+    }
+
+    await sendDigest(state.emailPayload);
+    await saveDigestRecord({
+      runDate: state.runDate,
+      emailPayload: state.emailPayload,
+      sections: state.personalisedDigest.sections,
+      runDurationMs: Date.now() - start,
+      runErrors: state.errors,
+    });
+
+    await mongoose.disconnect(); // must close, or the process (and container) never exits
+    process.exit(0);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error("AI Digest run failed:", reason);
+    await sendFailureAlert(reason); // never let a failure go unnoticed
+    if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
+    process.exit(1);
+  }
 }
+
+main();
 ```
 
 **Rules:**
 
-- Cron expression is `0 7 * * 1-5` — 7am, weekdays only. Never run on weekends.
-- Timezone always comes from `config.cronTimezone` (`Europe/Rome`) — never hardcode or rely on server local time. A Railway server may run in UTC.
-- The cron callback must never throw uncaught — always wrap in try/catch and call `sendFailureAlert`. An unhandled throw here can crash the whole process.
-- Compile the graph once at import time — never inside the callback.
+- **The process must always exit on its own.** `mongoose.disconnect()` before
+  every `process.exit()` — an open connection is a live handle that keeps
+  Node running, which keeps the Railway container (and the bill for it)
+  running indefinitely. This is the entire reason for moving off node-cron.
+- **Railway cron runs in UTC**, not `config.cronTimezone` or server local
+  time. Rome shifts between UTC+1 and UTC+2 across DST, so a fixed UTC
+  expression drifts by an hour relative to Rome across the year — see
+  `architecture.md` → "Deployment & scheduling" for the accepted-drift
+  decision. `CRON_TIMEZONE` still exists in `.env` for documentation only; no
+  code reads it to schedule anything.
+- Compile the graph once at import time (`graph.ts`'s module-level
+  `graph.compile()`) — never inside `main()`.
+- `src/index.ts` is a thin local-dev alias (`import "./run.js"`) for testing a
+  run on demand without Railway's cron. It is never what Railway executes.
 
 ---
 

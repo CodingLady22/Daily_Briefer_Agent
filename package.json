@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "Multi-agent LangGraph system that sends a daily HTML email digest about the AI engineering landscape.",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "src/run.ts",
   "scripts": {
-    "start": "tsx src/index.ts",
-    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/run.ts",
+    "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -20,14 +20,12 @@
     "cheerio": "latest",
     "dotenv": "latest",
     "mongoose": "latest",
-    "node-cron": "latest",
     "resend": "latest",
+    "tsx": "latest",
     "zod": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
-    "@types/node-cron": "latest",
-    "tsx": "latest",
     "typescript": "latest"
   }
 }

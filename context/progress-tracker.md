@@ -7,8 +7,10 @@ Update this file after every completed feature. Any AI agent reading this should
 ## Current Status
 
 **Phase:** 1, 2, 3, 4, 5 complete; Phase 6 in progress
-**Last completed:** 6.1 Cron scheduler (`startScheduler()` in `src/scheduler/cron.ts`, wired into `src/index.ts`) — live-verified process start
-**Next:** 6.2 Railway deployment
+**Last completed:** 6.1 rebuilt as a one-shot run entry — `src/run.ts` (connect → run graph once → send → persist → `mongoose.disconnect()` → `process.exit()`), replacing the earlier always-on node-cron scheduler (`src/scheduler/cron.ts` deleted, `node-cron`/`@types/node-cron` removed from `package.json`). `src/index.ts` is now a thin local-dev alias (`import "./run.js"`) with no scheduling. `package.json` scripts: `"start": "tsx src/run.ts"`, `"dev": "tsx src/index.ts"`; `tsx` moved from `devDependencies` to `dependencies` so it's present in the Railway production build.
+**Next:** 6.2 Railway deployment (start script, env vars, cron expression in UTC set in Railway's dashboard — not in code)
+
+> **Architecture change (post-6.1, user-directed):** switched from an always-on node-cron process to a one-shot script triggered by Railway's native cron, because node-cron kept the Node process (and Railway container) alive 24/7 just to fire once a day — billed continuously for no benefit. Railway's cron instead starts a fresh container per trigger, runs `npm start` to completion, and stops it, so the app had to become a script that always exits on its own. `src/run.ts` is the new production entry; the critical failure mode being guarded against is an open Mongoose connection silently keeping the process (and the bill) alive, so both the success and failure paths explicitly `mongoose.disconnect()` before `process.exit()`. Timezone decision: Railway cron runs in UTC, and Rome shifts UTC+1/UTC+2 across DST, so the chosen approach is a **fixed UTC cron expression with accepted ~1-hour seasonal drift** (not auto-adjusted for DST) — documented in `architecture.md` → "Deployment & scheduling". `CRON_TIMEZONE` stays in `.env`/`config` as documentation only; no code path uses it to schedule anything anymore. `architecture.md`, `build-plan.md`, `library-docs.md` all updated to match (folder structure, approved packages, data-flow diagram, Phase 6 plan, node-cron section replaced with a Railway-cron section). Not yet live-verified on Railway itself (that's 6.2) — `npm run typecheck` is clean and `npm install` confirms `node-cron`/`@types/node-cron` are gone.
 
 > All required `.env` values are now in place (Gemini as `LLM_PROVIDER`; `ANTHROPIC_API_KEY` intentionally left blank — see below). `npx tsx src/index.ts` was run live and printed `MongoDB connected` / `AI Digest started` — Phase 1 exit check passed for real. `search.tool.ts`, `benchmarkScraper.tool.ts`, and `pricingScraper.tool.ts` were all live-tested with the real `TAVILY_API_KEY` and returned correctly typed `RawItem[]` data — Phase 3 exit check passed for real.
 > `ANTHROPIC_API_KEY` is blank because of an account issue on the user's side — this is fine as-is. `src/config/index.ts` fully supports all three providers (gemini/openai/anthropic); the schema, refine check, and `getLLM()` switch only require whichever provider's key matches `LLM_PROVIDER`. Do not special-case or comment out Anthropic support again — nothing needs to change here once the account issue clears, just set `LLM_PROVIDER=anthropic` and fill in the key.
@@ -124,11 +126,11 @@ Do not start a new phase until every item in the current phase is checked.
 
 ---
 
-## Phase 6 — Scheduler and deployment
+## Phase 6 — One-shot run and deployment
 
-- [x] 6.1 Cron scheduler — `src/scheduler/cron.ts`, `0 7 * * 1-5`, Europe/Rome timezone
-- [ ] 6.2 Railway deployment — env vars set, service live, first scheduled run successful
-- [ ] **Phase 6 exit check passed** — service runs on Railway and delivers email on schedule
+- [x] 6.1 One-shot run entry — `src/run.ts` (connect, run graph once, send, persist, disconnect, exit; `src/index.ts` now a local-dev alias with no scheduling)
+- [ ] 6.2 Railway deploy — start script set, env vars set in dashboard, cron expression (UTC) set in service settings, verified container starts/runs/stops
+- [ ] **Phase 6 exit check passed** — Railway cron triggers a run, email + `DigestRecord` are produced, and the container shuts down afterward (not staying alive)
 
 ---
 

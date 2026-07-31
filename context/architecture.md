@@ -44,13 +44,12 @@ ai-digest/
 │   │   ├── connection.ts
 │   │   ├── digest.model.ts
 │   │   └── benchmarkSnapshot.model.ts
-│   ├── scheduler/
-│   │   └── cron.ts
 │   ├── config/
 │   │   └── index.ts           # Loads and validates env vars
 │   ├── types/
 │   │   └── index.ts           # Shared TypeScript types
-│   └── index.ts               # App entry point
+│   ├── run.ts                 # One-shot entry — Railway cron runs this and exits
+│   └── index.ts               # Local dev entry — imports run.ts, no scheduling
 ├── .env
 ├── .env.example
 ├── package.json
@@ -62,8 +61,8 @@ ai-digest/
 ## System boundaries and data flow
 
 ```
-[node-cron, 7am weekdays]
-        │
+[Railway cron, weekdays]
+        │  runs `src/run.ts` once, container stops when the process exits
         ▼
 [Orchestrator / Supervisor]
         │
@@ -225,6 +224,37 @@ One document per run. Lets the digest say "Gemini Flash price dropped since last
 
 ---
 
+## Deployment & scheduling
+
+The app is a **one-shot script, not an always-on process.** Railway's native cron
+starts a fresh container, runs `npx tsx src/run.ts` (via `npm start`) to
+completion, and stops the container. No scheduling library runs inside the
+app — the schedule lives entirely in Railway's service settings (cron
+expression), not in code.
+
+- **`src/run.ts` must always exit on its own.** On success: send the digest,
+  save the `DigestRecord`, call `mongoose.disconnect()`, then `process.exit(0)`.
+  On a fatal error: call `sendFailureAlert(reason)`, close the connection if one
+  was opened, then `process.exit(1)`. An open Mongoose connection is the classic
+  way to leave a "one-shot" process hanging — Railway then keeps billing the
+  container as if it were still working, defeating the entire point of moving
+  off node-cron.
+- **`src/index.ts` is local-dev only.** It imports `run.ts` to trigger an
+  immediate run with no scheduling, for testing outside of Railway. Railway
+  never invokes it — production always runs `src/run.ts` via `npm start`.
+- **Timezone: Railway cron runs in UTC.** Rome is UTC+1 in winter and UTC+2
+  during DST, so "7am Rome" maps to a different UTC hour depending on the
+  season. Decision: the Railway cron expression is set as a **fixed UTC time**
+  and is **not** adjusted automatically for DST — this means the digest lands
+  around 6am or 8am Rome time (a 1-hour drift) for part of the year, rather
+  than exactly 7am year-round. If tighter accuracy is ever needed, the
+  expression must be manually updated in Railway's dashboard at each DST
+  changeover. `CRON_TIMEZONE` in `.env` is kept only as documentation of the
+  intended local time the UTC expression was chosen for — no code path reads
+  it to schedule anything anymore.
+
+---
+
 ## Approved packages
 
 ```json
@@ -237,14 +267,12 @@ One document per run. Lets the digest say "Gemini Flash price dropped since last
   "@langchain/community": "latest",
   "mongoose": "latest",
   "resend": "latest",
-  "node-cron": "latest",
   "dotenv": "latest",
   "zod": "latest",
   "axios": "latest",
   "cheerio": "latest",
   "typescript": "latest",
   "tsx": "latest",
-  "@types/node": "latest",
-  "@types/node-cron": "latest"
+  "@types/node": "latest"
 }
 ```
