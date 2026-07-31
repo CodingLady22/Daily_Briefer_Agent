@@ -11,8 +11,10 @@ import { sendDigest, sendFailureAlert } from "./email/sender.js";
 import { saveDigestRecord } from "./db/digest.model.js";
 
 async function runDigest(): Promise<void> {
+  // No "run started" log here — the graph's supervisor node already logs it
+  // (and stamps state.runDate) the moment invoke() reaches it, so a second
+  // log line here would just duplicate that with a few ms of skew.
   const start = Date.now();
-  console.log(`AI Digest run started at ${new Date().toISOString()}`);
 
   const state = await digestGraph.invoke({});
   const runDurationMs = Date.now() - start;
