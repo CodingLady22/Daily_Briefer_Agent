@@ -1,10 +1,11 @@
 // App entry point: connects to MongoDB and starts the cron scheduler.
 import { connectDB } from "./db/connection.js";
+import { startScheduler } from "./scheduler/cron.js";
 
 async function main(): Promise<void> {
   await connectDB();
+  startScheduler();
   console.log("AI Digest started");
-  // Cron scheduler wiring is added here in Phase 6 once src/scheduler/cron.ts exists.
 }
 
 main().catch((err) => {
