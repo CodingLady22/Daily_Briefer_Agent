@@ -20,6 +20,9 @@ const envSchema = z
     RESEND_API_KEY: z.string().min(1, "RESEND_API_KEY is required"),
     RESEND_FROM: z.string().min(1, "RESEND_FROM is required"),
     DIGEST_TO_EMAIL: z.string().email("DIGEST_TO_EMAIL must be a valid email"),
+    // Documentation only — Railway's cron runs in UTC and is configured in its
+    // service settings, not from this value. Kept so the intended local time
+    // behind the chosen UTC expression stays legible.
     CRON_TIMEZONE: z.string().default("Europe/Rome"),
   })
   .refine(

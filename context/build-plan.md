@@ -278,20 +278,43 @@ File: `src/email/sender.ts` (extend)
 
 ---
 
-## Phase 6 — Scheduler and deployment
+## Phase 6 — One-shot run and deployment
 
-### 6.1 — Cron scheduler
-File: `src/scheduler/cron.ts`
-- Use `node-cron` to schedule the graph invocation
-- Schedule: `0 7 * * 1-5` (7am Monday–Friday)
-- Timezone: read from `CRON_TIMEZONE` env var (default: `Europe/Rome`)
-- Log run start and completion with timestamps
-- Catch and log any uncaught errors from the graph — never crash the process
-- On a fatal error, call `sendFailureAlert(reason)` so you know a run failed
+Railway's native cron starts a container, runs the app once, and stops the
+container when the process exits — so the app must be a script that completes
+and exits cleanly, not a long-running scheduler. This replaces the earlier
+node-cron-based plan.
 
-### 6.2 — Railway deployment
-- Add a `Procfile` or `railway.toml` with start command: `npx tsx src/index.ts`
-- Confirm all env vars are set in Railway dashboard
-- Deploy and verify the first scheduled run completes successfully
+### 6.1 — One-shot run entry
+File: `src/run.ts`
+- `connectDB()`
+- Invoke the compiled `digestGraph` once
+- On success: log a run summary, close the Mongoose connection
+  (`mongoose.disconnect()`), then `process.exit(0)`
+- On a fatal error: call `sendFailureAlert(reason)`, close the connection if one
+  was opened, then `process.exit(1)`
+- **Critical:** the process must always exit on its own. An open Mongoose
+  connection keeps the process alive, which keeps the Railway container
+  running (and billed) 24/7 — exactly what moving off node-cron was meant to
+  avoid.
+- `src/index.ts` stays as a local-dev-only entry that imports `run.ts` to
+  trigger an immediate run with no scheduling — useful for testing without
+  waiting on Railway's cron. Railway never uses it; production always runs
+  `src/run.ts` via `npm start`.
 
-**Phase 6 exit check:** The service runs on Railway, survives a restart, and delivers the email on schedule without manual intervention.
+### 6.2 — Railway deploy
+- `package.json`: `"start": "tsx src/run.ts"`, `"dev": "tsx src/index.ts"`.
+  `tsx` must be in `dependencies` (not `devDependencies`) so it's present in
+  the Railway production build.
+- Confirm all env vars are set in the Railway service dashboard
+- Set the cron expression **in Railway's service settings, in UTC** — Railway
+  cron does not use `CRON_TIMEZONE` or any code-level timezone; see
+  `architecture.md` → "Deployment & scheduling" for the fixed-UTC / DST
+  decision
+- Deploy and verify: the container starts, runs one full digest, sends the
+  email, and then **stops** — check the deployment logs show start → run →
+  stop, not a process that stays alive indefinitely
+
+**Phase 6 exit check:** A Railway cron trigger runs the container, the digest
+email is delivered, the `DigestRecord` is saved, and the container **shuts
+down** afterward — not that it stays alive.
