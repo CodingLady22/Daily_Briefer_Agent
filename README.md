@@ -4,7 +4,9 @@ A multi-agent [LangGraph](https://langchain-ai.github.io/langgraphjs/) system th
 
 There is no UI. The email **is** the product.
 
----
+<img width="800" height="1192" alt="ai-digest-email" src="https://github.com/user-attachments/assets/d15d0233-f194-4539-a96e-cc3600e7d23f" />
+
+<hr>
 
 ## How it works
 
