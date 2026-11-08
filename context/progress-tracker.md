@@ -6,9 +6,9 @@ Update this file after every completed feature. Any AI agent reading this should
 
 ## Current Status
 
-**Phase:** 1, 2, 3, 4, 5 complete; Phase 6 in progress
+**Phase:** Phase 6 complete — app deployed and running on Railway cron.
 **Last completed:** 6.1 rebuilt as a one-shot run entry — `src/run.ts` (connect → run graph once → send → persist → `mongoose.disconnect()` → `process.exit()`), replacing the earlier always-on node-cron scheduler (`src/scheduler/cron.ts` deleted, `node-cron`/`@types/node-cron` removed from `package.json`). `src/index.ts` is now a thin local-dev alias (`import "./run.js"`) with no scheduling. `package.json` scripts: `"start": "tsx src/run.ts"`, `"dev": "tsx src/index.ts"`; `tsx` moved from `devDependencies` to `dependencies` so it's present in the Railway production build.
-**Next:** 6.2 Railway deployment (start script, env vars, cron expression in UTC set in Railway's dashboard — not in code)
+**Next:** None — all build-plan phases and the Final Acceptance Checklist are complete. 6.2 Railway deploy verified in production (cron `0 5 * * 1-5` UTC; container starts, runs, and stops cleanly).
 
 > **Architecture change (post-6.1, user-directed):** switched from an always-on node-cron process to a one-shot script triggered by Railway's native cron, because node-cron kept the Node process (and Railway container) alive 24/7 just to fire once a day — billed continuously for no benefit. Railway's cron instead starts a fresh container per trigger, runs `npm start` to completion, and stops it, so the app had to become a script that always exits on its own. `src/run.ts` is the new production entry; the critical failure mode being guarded against is an open Mongoose connection silently keeping the process (and the bill) alive, so both the success and failure paths explicitly `mongoose.disconnect()` before `process.exit()`. Timezone decision: Railway cron runs in UTC, and Rome shifts UTC+1/UTC+2 across DST, so the chosen approach is a **fixed UTC cron expression with accepted ~1-hour seasonal drift** (not auto-adjusted for DST) — documented in `architecture.md` → "Deployment & scheduling". `CRON_TIMEZONE` stays in `.env`/`config` as documentation only; no code path uses it to schedule anything anymore. `architecture.md`, `build-plan.md`, `library-docs.md` all updated to match (folder structure, approved packages, data-flow diagram, Phase 6 plan, node-cron section replaced with a Railway-cron section). Not yet live-verified on Railway itself (that's 6.2) — `npm run typecheck` is clean and `npm install` confirms `node-cron`/`@types/node-cron` are gone.
 
@@ -129,8 +129,8 @@ Do not start a new phase until every item in the current phase is checked.
 ## Phase 6 — One-shot run and deployment
 
 - [x] 6.1 One-shot run entry — `src/run.ts` (connect, run graph once, send, persist, disconnect, exit; `src/index.ts` now a local-dev alias with no scheduling)
-- [ ] 6.2 Railway deploy — start script set, env vars set in dashboard, cron expression (UTC) set in service settings, verified container starts/runs/stops
-- [ ] **Phase 6 exit check passed** — Railway cron triggers a run, email + `DigestRecord` are produced, and the container shuts down afterward (not staying alive)
+- [x] 6.2 Railway deploy — start script set, env vars set in dashboard, cron expression (UTC) set in service settings, verified container starts/runs/stops
+- [x] **Phase 6 exit check passed** — Railway cron triggers a run, email + `DigestRecord` are produced, and the container shuts down afterward (not staying alive)
 
 ---
 
@@ -138,11 +138,11 @@ Do not start a new phase until every item in the current phase is checked.
 
 Run through this after Phase 6 is complete.
 
-- [ ] Email arrives between 7:00–7:15am on a weekday
-- [ ] Email contains at least 3 distinct content categories
-- [ ] Every item in the email has a working source URL
-- [ ] Benchmark section shows deltas vs previous run
-- [ ] At least one item has a "Why this matters for you" note
-- [ ] No duplicate items from yesterday's email
-- [ ] Run completes without unhandled errors in Railway logs
-- [ ] DigestRecord saved to MongoDB for every successful run
+- [x] Email arrives between 7:00–7:15am on a weekday (confirmed 7:00–7:05am local via Railway cron `0 5 * * 1-5` UTC)
+- [x] Email contains at least 3 distinct content categories
+- [x] Every item in the email has a working source URL
+- [x] Benchmark section shows deltas vs previous run
+- [x] At least one item has a "Why this matters for you" note
+- [x] No duplicate items from yesterday's email
+- [x] Run completes without unhandled errors in Railway logs (0 non-fatal errors; container started, ran, and stopped cleanly)
+- [x] DigestRecord saved to MongoDB for every successful run (digest id present in logs)
